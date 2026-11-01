@@ -1,6 +1,6 @@
 (function(){
   'use strict';
-  const INDEX_URL='audio/index.json?v=cet4-2';
+  const INDEX_URL='audio/index.json?v=emma-1';
   let player=null,seq=0,index=null;
   // 双击打开（file://）时由 LynnData 改读 audio/index.js 副本；mp3 本身用 <audio> 播放，双击打开也能放。
   const fileMode=!!(window.LynnData&&window.LynnData.fileMode);
