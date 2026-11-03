@@ -86,25 +86,27 @@
 
   function dailyContent(date = new Date(), context = {}) {
     const christmas = context.christmas || null;
-    const key = christmas?.welcomeKey || dayKey(date);
+    const occasion = context.occasion || christmas;
+    const key = occasion?.welcomeKey || dayKey(date);
     const seed = hash(key);
     const birthday = context.birthday === true;
-    const name = christmas?.name || (birthday ? '童雯凌' : (seed % 2 ? 'Lynn' : '童雯凌'));
-    const message = christmas?.blessing || (birthday
+    const name = occasion?.name || (birthday ? '童雯凌' : (seed % 2 ? 'Lynn' : '童雯凌'));
+    const message = occasion?.blessing || (birthday
       ? '今天先收下所有祝福，再慢慢长大。单词可以背，蛋糕也一定要吃。'
       : MESSAGES[seed % MESSAGES.length]);
     return {
       key,
-      dateKey: christmas?.key || key,
+      dateKey: occasion?.key || key,
       name,
-      salutation: christmas?.salutation || (birthday ? '生日快乐' : period(date.getHours())),
+      salutation: occasion?.salutation || (birthday ? '生日快乐' : period(date.getHours())),
       message,
       plan: studyPlan(context),
-      signOff: christmas?.signOff || SIGN_OFFS[Math.floor(seed / MESSAGES.length) % SIGN_OFFS.length],
-      dateLabel: christmas?.dateLabel || new Intl.DateTimeFormat('zh-CN', {month: 'long', day: 'numeric', weekday: 'long'}).format(date),
+      signOff: occasion?.signOff || SIGN_OFFS[Math.floor(seed / MESSAGES.length) % SIGN_OFFS.length],
+      dateLabel: occasion?.dateLabel || new Intl.DateTimeFormat('zh-CN', {month: 'long', day: 'numeric', weekday: 'long'}).format(date),
       streak: Math.max(0, Number(context.streak) || 0),
       birthday,
-      christmas
+      christmas,
+      occasion
     };
   }
 
@@ -201,7 +203,7 @@
     const reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const previousFocus = root.document.activeElement;
     const layer = root.document.createElement('div');
-    layer.className = `daily-welcome${content.christmas ? ` is-christmas is-christmas-${content.christmas.stage}` : ''}`;
+    layer.className = `daily-welcome${content.christmas ? ` is-christmas is-christmas-${content.christmas.stage}` : content.occasion ? ` is-festival is-festival-${content.occasion.slug}` : ''}`;
     layer.innerHTML = `
       <div class="daily-welcome__paper" role="dialog" aria-modal="true" aria-labelledby="daily-welcome-title" aria-describedby="daily-welcome-message">
         <section class="daily-welcome__copy">
@@ -221,8 +223,9 @@
         </section>
         <aside class="daily-welcome__side" aria-label="小紫怪的今日留言">
           <span class="daily-welcome__number">${String(now.getDate()).padStart(2, '0')}</span>
-          <img src="${content.christmas?.mascot || (content.birthday ? 'mascot-bday.svg' : 'mascot.svg')}" alt="抱着单词本的小紫怪">
-          <p>${content.signOff}</p>
+          ${content.occasion?.sideWord ? `<span class="daily-welcome__festival-word" aria-hidden="true">${escapeHTML(content.occasion.sideWord)}</span>` : ''}
+          <img src="${content.occasion?.mascot || (content.birthday ? 'mascot-bday.svg' : 'mascot.svg')}" alt="抱着单词本的小紫怪">
+          <p>${escapeHTML(content.signOff)}</p>
           ${content.streak ? `<small>已经连续学习 ${content.streak} 天</small>` : '<small>今天也从一小步开始</small>'}
         </aside>
       </div>`;

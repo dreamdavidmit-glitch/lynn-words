@@ -3,3 +3,4 @@ cloudflare/.wrangler/
 .dev.vars
 cloudflare/.dev.vars
 qa-output/
+/festival-*.png
