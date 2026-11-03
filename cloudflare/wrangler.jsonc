@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lynn-words-sync",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-03",
+  "workers_dev": true,
+  "vars": {
+    "ALLOWED_ORIGIN": "https://dreamdavidmit-glitch.github.io"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lynn-words-progress",
+      "database_id": "95c993a7-5f0b-45d1-87d6-b5b7bf330d31",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

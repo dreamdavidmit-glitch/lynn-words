@@ -4,7 +4,16 @@
 
 在线使用：https://dreamdavidmit-glitch.github.io/lynn-words/
 
-学习进度只保存在自己的浏览器里，不会上传到任何地方。
+学习进度会先保存在自己的浏览器里，再通过 Cloudflare Worker 自动同步到专属 D1 数据库。断网时仍可学习，恢复网络后会自动补传；多台设备同时有新进度时，网站会先让 Lynn 选择保留哪一份。
+
+## 云端进度
+
+- GitHub Pages 负责发布网页，Cloudflare Worker + D1 负责保存进度。
+- 第一次使用专属初始化链接设置同步密码，并上传当前设备上的原有进度。
+- 新设备点击右下角云朵，输入同步密码即可继续。
+- Cloudflare 的密钥只保存在 Worker Secrets 中，不会进入 GitHub 仓库。
+
+Cloudflare 配置在 `cloudflare/`。部署前需要在 Worker Secrets 中设置 `CLAIM_TOKEN` 和 `SESSION_SECRET`，再运行 D1 migration 与 Worker deploy。不要把真实密钥写进代码、说明文件或提交记录。
 
 ## 发布新版本
 
