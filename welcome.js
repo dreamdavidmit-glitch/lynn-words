@@ -84,23 +84,26 @@
   }
 
   function dailyContent(date = new Date(), context = {}) {
-    const key = dayKey(date);
+    const christmas = context.christmas || null;
+    const key = christmas?.welcomeKey || dayKey(date);
     const seed = hash(key);
     const birthday = context.birthday === true;
-    const name = birthday ? '童雯凌' : (seed % 2 ? 'Lynn' : '童雯凌');
-    const message = birthday
+    const name = christmas?.name || (birthday ? '童雯凌' : (seed % 2 ? 'Lynn' : '童雯凌'));
+    const message = christmas?.blessing || (birthday
       ? '今天先收下所有祝福，再慢慢长大。单词可以背，蛋糕也一定要吃。'
-      : MESSAGES[seed % MESSAGES.length];
+      : MESSAGES[seed % MESSAGES.length]);
     return {
       key,
+      dateKey: christmas?.key || key,
       name,
-      salutation: birthday ? '生日快乐' : period(date.getHours()),
+      salutation: christmas?.salutation || (birthday ? '生日快乐' : period(date.getHours())),
       message,
       plan: studyPlan(context),
-      signOff: SIGN_OFFS[Math.floor(seed / MESSAGES.length) % SIGN_OFFS.length],
-      dateLabel: new Intl.DateTimeFormat('zh-CN', {month: 'long', day: 'numeric', weekday: 'long'}).format(date),
+      signOff: christmas?.signOff || SIGN_OFFS[Math.floor(seed / MESSAGES.length) % SIGN_OFFS.length],
+      dateLabel: christmas?.dateLabel || new Intl.DateTimeFormat('zh-CN', {month: 'long', day: 'numeric', weekday: 'long'}).format(date),
       streak: Math.max(0, Number(context.streak) || 0),
-      birthday
+      birthday,
+      christmas
     };
   }
 
@@ -117,18 +120,19 @@
   function show(context = {}, options = {}) {
     if (!root.document || root.document.querySelector('.daily-welcome')) return false;
     const now = options.date instanceof Date ? options.date : new Date();
-    if (!options.force && seenToday(now)) return false;
     const content = dailyContent(now, context);
+    try { if (!options.force && root.localStorage?.getItem(STORAGE_KEY) === content.key) return false; }
+    catch (_) {}
     const reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const previousFocus = root.document.activeElement;
     const layer = root.document.createElement('div');
-    layer.className = 'daily-welcome';
+    layer.className = `daily-welcome${content.christmas ? ` is-christmas is-christmas-${content.christmas.stage}` : ''}`;
     layer.innerHTML = `
       <div class="daily-welcome__paper" role="dialog" aria-modal="true" aria-labelledby="daily-welcome-title" aria-describedby="daily-welcome-message">
         <section class="daily-welcome__copy">
           <div class="daily-welcome__meta">
             <span>LYNN’S DAILY NOTE</span>
-            <time datetime="${content.key}">${content.dateLabel}</time>
+            <time datetime="${content.dateKey}">${content.dateLabel}</time>
           </div>
           <h1 id="daily-welcome-title"><span>${content.salutation}，</span>${content.name}。</h1>
           <p id="daily-welcome-message" class="daily-welcome__message">${content.message}</p>
@@ -142,7 +146,7 @@
         </section>
         <aside class="daily-welcome__side" aria-label="小紫怪的今日留言">
           <span class="daily-welcome__number">${String(now.getDate()).padStart(2, '0')}</span>
-          <img src="${content.birthday ? 'mascot-bday.svg' : 'mascot.svg'}" alt="抱着单词本的小紫怪">
+          <img src="${content.christmas?.mascot || (content.birthday ? 'mascot-bday.svg' : 'mascot.svg')}" alt="抱着单词本的小紫怪">
           <p>${content.signOff}</p>
           ${content.streak ? `<small>已经连续学习 ${content.streak} 天</small>` : '<small>今天也从一小步开始</small>'}
         </aside>
@@ -152,7 +156,8 @@
     const close = () => {
       if (closed) return;
       closed = true;
-      remember(now);
+      try { root.localStorage?.setItem(STORAGE_KEY, content.key); }
+      catch (_) {}
       layer.classList.add('is-leaving');
       root.document.body.classList.remove('welcome-open');
       root.document.removeEventListener('keydown', onKeydown, true);

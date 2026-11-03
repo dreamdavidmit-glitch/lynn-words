@@ -229,3 +229,68 @@ body.welcome-open{overflow:hidden}
 @media(max-width:700px){.daily-welcome{padding:12px}.daily-welcome__paper{grid-template-columns:1fr;max-height:calc(100dvh - 24px);border-radius:26px}.daily-welcome__copy{padding:34px 28px 30px}.daily-welcome__meta{padding-bottom:17px}.daily-welcome__copy h1{margin:32px 0 18px;font-size:clamp(36px,12vw,52px)}.daily-welcome__message{font-size:17px;line-height:1.8}.daily-welcome__promise{margin:24px 0 22px}.daily-welcome__start{width:100%}.daily-welcome__side{min-height:145px;display:grid;grid-template-columns:100px 1fr;grid-template-rows:auto auto;gap:2px 16px;padding:18px 24px;text-align:left}.daily-welcome__side::before{display:none}.daily-welcome__side img{grid-row:1/3;width:96px;margin:0}.daily-welcome__side p{font-size:13px}.daily-welcome__side small{margin:0}.daily-welcome__number{top:16px;right:18px;font-size:12px}}
 @media(max-width:390px){.daily-welcome__copy{padding:28px 22px 24px}.daily-welcome__meta{font-size:9px;letter-spacing:1px}.daily-welcome__copy h1{margin-top:26px}.daily-welcome__promise{padding:15px 16px}.daily-welcome__side{grid-template-columns:76px 1fr;min-height:118px;padding:14px 18px}.daily-welcome__side img{width:76px}.daily-welcome__number{display:none}}
 @media(prefers-reduced-motion:reduce){.daily-welcome,.daily-welcome__paper{transition:none}.daily-welcome__side img{animation:none}}
+
+/* 圣诞周：仅 12 月 24–30 日由 christmas.js 启用 */
+body.christmas-active{--paper:#fff9f2;--ink:#4d3038;--muted:#927b7e;--primary:#a93348;--primary-deep:#75283a;--soft:#f8e8df;--line:#ead8cb;--gold:#e7b54e;--shadow:0 18px 46px #64263318}
+body.christmas-active::before{background:radial-gradient(circle at 12% 8%,#ffe2df 0,transparent 32%),radial-gradient(circle at 92% 18%,#e0edda 0,transparent 30%),radial-gradient(#d9c9be 1px,transparent 1.4px) 0 0/24px 24px,var(--paper)}
+body.christmas-active::after{content:'';position:fixed;inset:0;z-index:450;pointer-events:none;opacity:.42;background:radial-gradient(circle,#fff 0 2px,transparent 2.6px) 0 0/88px 98px,radial-gradient(circle,#fff 0 1px,transparent 1.8px) 24px 20px/64px 74px;animation:christmasSnow 16s linear infinite}
+body.christmas-active .sidebar{background:linear-gradient(180deg,#f7ece5,#f0e8df);border-color:#e7d7c9}
+body.christmas-eve .sidebar{background:linear-gradient(180deg,#f9e8e5,#efe9df)}
+body.christmas-day .sidebar{background:linear-gradient(180deg,#fff0df,#f3eadf)}
+body.christmas-active .brand-mark{background:linear-gradient(135deg,#b7384c,#396c4d);box-shadow:0 7px 18px #7a2f3e35}
+body.christmas-active .brand,body.christmas-active .sidebar-note strong,body.christmas-active .page-heading h1{color:#75283a}
+body.christmas-active .nav button.active{background:linear-gradient(135deg,#a93348,#326646);box-shadow:0 8px 20px #75324235}
+body.christmas-active .btn:not(.secondary):not(.ghost):not(.choice):not(.danger){background:linear-gradient(135deg,#aa3349,#7d263a);border-color:transparent;box-shadow:0 7px 18px #8d2f4030}
+body.christmas-active .progress-fill{background:linear-gradient(90deg,#3f7654,#d3a33c,#b6384c)}
+body.christmas-active .tag{background:#f7e8df;color:#7b3442}
+body.christmas-active .hero{background:linear-gradient(130deg,#fff6e9,#f9e8e3 55%,#e8f1e3);border:1px solid #ead8cb}
+body.christmas-day .hero{background:linear-gradient(130deg,#fff8dc,#fbe6dd 58%,#edf3df)}
+body.christmas-weekday .hero{background:linear-gradient(130deg,#f8f0f8,#f5ebe5 58%,#e6efe5)}
+body.christmas-active .hero h1{color:#6d2c3a}
+body.christmas-active .hero h1 em{background:linear-gradient(90deg,#9d2e42,#bc7045,#386f4d);-webkit-background-clip:text;background-clip:text;color:transparent}
+body.christmas-active .hero::before{content:'✦';color:#e2b64e}
+body.christmas-active .hero::after{content:'✧';color:#b34b5b}
+body.christmas-active .mascot-btn img{width:min(100%,255px);max-height:315px;object-fit:contain}
+body.christmas-active .sidebar-note img{max-height:138px;object-fit:contain}
+body.christmas-active .photo-frame{display:none}
+body.christmas-active .bubble{border-color:#e8d0c2;color:#7c3442}
+@keyframes christmasSnow{to{background-position:0 196px,24px 168px}}
+
+.christmas-card{position:relative;isolation:isolate;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(270px,.75fr);gap:34px;align-items:end;margin:0 0 24px;padding:48px 42px 34px;border-radius:30px;color:#fff;background:linear-gradient(135deg,#4b1725,#753044 52%,#244e39);box-shadow:0 22px 55px #54253632}
+.christmas-card--day{background:linear-gradient(135deg,#6c2432,#a33a45 50%,#6f5123)}
+.christmas-card--week{background:linear-gradient(135deg,#49304f,#70404e 50%,#315443)}
+.christmas-card::after{content:'';position:absolute;inset:0;z-index:-1;background:radial-gradient(circle at 9% 18%,#ffffff14 0 2px,transparent 2.5px) 0 0/44px 44px}
+.christmas-card__garland{position:absolute;z-index:-1;right:-28px;top:-28px;width:min(48%,520px);height:170px;object-fit:cover;object-position:center bottom;border-radius:0 0 0 40px;opacity:.78;mix-blend-mode:screen}
+.christmas-card__copy{position:relative;z-index:2;max-width:650px}
+.christmas-card__tag{display:inline-block;margin-bottom:14px;padding:5px 12px;border:1px solid #ffffff4a;border-radius:999px;background:#ffffff17;font-size:10px;letter-spacing:1.4px}
+.christmas-card h2{max-width:620px;margin:0 0 12px;color:#fff7e9;font:500 clamp(27px,3.5vw,42px)/1.35 Georgia,'Songti SC',serif}
+.christmas-card__blessing{max-width:620px;color:#fff9f0;font-size:15px;line-height:1.9}
+.christmas-card__focus{display:inline-block;margin-top:18px;padding:9px 13px;border-radius:12px;background:#170b102b;color:#f8e8de;font-size:11px;line-height:1.7}
+.christmas-apple{position:relative;z-index:2;display:grid;grid-template-columns:62px 1fr;gap:5px 14px;align-items:center;padding:20px;border:1px solid #ffffff3d;border-radius:22px;background:#fffaf1ed;color:#5d2e37;box-shadow:0 14px 32px #1f0d1430;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.christmas-apple__fruit{grid-row:1/3;display:grid;place-items:center;width:62px;height:62px;border-radius:50%;background:#f8e0d8;font-size:37px;filter:drop-shadow(0 5px 8px #8d28362e)}
+.christmas-apple strong{display:block;color:#74283a;font-size:14px}
+.christmas-apple p{margin-top:4px;color:#8f6d70;font-size:11px;line-height:1.65}
+.christmas-apple__button{grid-column:1/-1;width:100%;margin-top:9px;min-height:40px!important;background:linear-gradient(135deg,#3e7652,#2e6043)!important;box-shadow:none!important}
+.christmas-apple__check{position:absolute;right:16px;top:16px;display:grid;place-items:center;width:25px;height:25px;border-radius:50%;background:#3d7652;color:#fff;font-weight:800}
+.christmas-apple.is-received{background:#f5f2e7ed}
+.apple-burst{position:fixed;left:50%;top:58%;z-index:900;pointer-events:none}
+.apple-burst i{position:absolute;font-style:normal;font-size:27px;animation:appleFly 1.55s cubic-bezier(.2,.78,.24,1) forwards}
+@keyframes appleFly{0%{opacity:0;transform:translate(0,0) scale(.4)}15%{opacity:1}100%{opacity:0;transform:translate(var(--x),var(--y)) rotate(var(--r)) scale(1)}}
+
+.daily-welcome.is-christmas{background:#351b256e}
+.daily-welcome.is-christmas .daily-welcome__paper{border-color:#f1d8c4;background:#fffaf3;box-shadow:0 34px 100px #35121e5c}
+.daily-welcome.is-christmas .daily-welcome__copy h1{color:#772b3b}
+.daily-welcome.is-christmas .daily-welcome__copy h1 span{color:#a95a54}
+.daily-welcome.is-christmas .daily-welcome__message{color:#6a4649}
+.daily-welcome.is-christmas .daily-welcome__promise{border-left-color:#3f7654;background:#f1eee2}
+.daily-welcome.is-christmas .daily-welcome__promise span{color:#4a7658}
+.daily-welcome.is-christmas .daily-welcome__start{background:#9e3044;box-shadow:0 10px 24px #8d2b3c42}
+.daily-welcome.is-christmas-day .daily-welcome__start{background:#9c6330}
+.daily-welcome.is-christmas .daily-welcome__side{background:linear-gradient(165deg,#f7e3dd,#f0e9d8 66%,#dcebd9)}
+.daily-welcome.is-christmas-day .daily-welcome__side{background:linear-gradient(165deg,#fff0d1,#f7dfd8 62%,#e6edcf)}
+.daily-welcome.is-christmas .daily-welcome__side::before{content:'NOËL';color:#ffffff80;font-size:56px}
+.daily-welcome.is-christmas .daily-welcome__side img{width:min(220px,100%);max-height:310px;object-fit:contain}
+
+@media(max-width:800px){.christmas-card{grid-template-columns:1fr;padding:42px 28px 28px}.christmas-card__garland{width:70%;height:130px;opacity:.55}.christmas-apple{max-width:520px}.christmas-card h2{font-size:32px}}
+@media(max-width:520px){.christmas-card{padding:38px 20px 22px;border-radius:24px;gap:22px}.christmas-card__garland{width:92%;right:-60px;top:-34px}.christmas-card h2{font-size:27px}.christmas-card__blessing{font-size:13px}.christmas-card__focus{font-size:10px}.christmas-apple{grid-template-columns:50px 1fr;padding:16px}.christmas-apple__fruit{width:50px;height:50px;font-size:30px}.daily-welcome.is-christmas .daily-welcome__side img{width:90px;height:100px}}
+@media(prefers-reduced-motion:reduce){body.christmas-active::after{animation:none}.apple-burst{display:none}}
