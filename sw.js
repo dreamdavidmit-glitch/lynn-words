@@ -3,8 +3,8 @@
 // 词典分片和识别组件体积大、基本不变，用缓存优先。
 // 读音 mp3 不经过这里，交给浏览器自己处理（iPad Safari 播放音频需要分段请求）。
 // 如果以后改了 dictionary/ 或 vendor/ 里的文件，把下面的 VERSION 改一下即可清掉旧缓存。
-const VERSION = 'lynn-v9-20261103';
-const CORE = ['./', 'index.html', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'assets/christmas/lynn-mascot-christmas.png', 'assets/christmas/pieces/garland-lights.png', 'assets/christmas/jingle-bells.mp3', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
+const VERSION = 'lynn-v10-20261103';
+const CORE = ['./', 'index.html', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'release.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'assets/christmas/lynn-mascot-christmas.png', 'assets/christmas/pieces/garland-lights.png', 'assets/christmas/jingle-bells.mp3', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(VERSION)

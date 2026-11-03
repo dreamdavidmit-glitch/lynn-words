@@ -2,6 +2,7 @@
   'use strict';
 
   const STORAGE_KEY = 'lynn:dailyWelcomeDate';
+  const RELEASE_STORAGE_KEY = 'lynn:seenRelease';
   const MESSAGES = [
     '今天不用一下子变得很厉害，只要比昨天多认识一个词。',
     '把注意力留给眼前这一小组，剩下的路会自己慢慢变短。',
@@ -117,6 +118,80 @@
     catch (_) {}
   }
 
+  function escapeHTML(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[character]);
+  }
+
+  function showRelease(release, onClose) {
+    if (!release?.id || !root.document || root.document.querySelector('.daily-welcome')) return false;
+    try { if (root.localStorage?.getItem(RELEASE_STORAGE_KEY) === release.id) return false; }
+    catch (_) {}
+    const reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const previousFocus = root.document.activeElement;
+    const items = Array.isArray(release.items) ? release.items.slice(0, 6) : [];
+    const layer = root.document.createElement('div');
+    layer.className = 'daily-welcome release-welcome';
+    layer.innerHTML = `
+      <div class="daily-welcome__paper release-welcome__paper" role="dialog" aria-modal="true" aria-labelledby="release-welcome-title" aria-describedby="release-welcome-message">
+        <section class="daily-welcome__copy release-welcome__copy">
+          <div class="daily-welcome__meta">
+            <span>LYNN’S LITTLE UPDATE</span>
+            <time>${escapeHTML(release.date || release.version)}</time>
+          </div>
+          <div class="release-welcome__badge">NEW · ${escapeHTML(release.version)}</div>
+          <h1 id="release-welcome-title"><span>版本更新信</span>${escapeHTML(release.title || '小词窝更新啦')}</h1>
+          <p id="release-welcome-message" class="daily-welcome__message">${escapeHTML(release.message || '')}</p>
+          <div class="release-welcome__list">
+            ${items.map(item => `<article><span aria-hidden="true">${escapeHTML(item.icon || '✦')}</span><div><h2>${escapeHTML(item.title)}</h2><p>${escapeHTML(item.text)}</p></div></article>`).join('')}
+          </div>
+          <button type="button" class="daily-welcome__start" data-release-close>
+            <span>知道啦，开始背词</span><span aria-hidden="true">→</span>
+          </button>
+        </section>
+        <aside class="daily-welcome__side release-welcome__side" aria-label="小紫怪的更新留言">
+          <span class="daily-welcome__number">NEW</span>
+          <img src="mascot.svg" alt="抱着单词本的小紫怪">
+          <p>${escapeHTML(release.signOff || '小紫怪会继续陪你认真背词。')}</p>
+          <small>这封更新信只会出现一次</small>
+        </aside>
+      </div>`;
+
+    let closed = false;
+    const finish = () => {
+      layer.remove();
+      if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+      if (typeof onClose === 'function') onClose();
+    };
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      try { root.localStorage?.setItem(RELEASE_STORAGE_KEY, release.id); }
+      catch (_) {}
+      layer.classList.add('is-leaving');
+      root.document.body.classList.remove('welcome-open');
+      root.document.removeEventListener('keydown', onKeydown, true);
+      root.setTimeout(finish, reduced ? 0 : 260);
+    };
+    const onKeydown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+      if (event.key === 'Tab') {
+        const button = layer.querySelector('[data-release-close]');
+        if (button) { event.preventDefault(); button.focus(); }
+      }
+    };
+    layer.querySelector('[data-release-close]').addEventListener('click', close);
+    root.document.addEventListener('keydown', onKeydown, true);
+    root.document.body.appendChild(layer);
+    root.document.body.classList.add('welcome-open');
+    root.requestAnimationFrame(() => {
+      layer.classList.add('is-ready');
+      layer.querySelector('[data-release-close]').focus({preventScroll: true});
+    });
+    return true;
+  }
+
   function show(context = {}, options = {}) {
     if (!root.document || root.document.querySelector('.daily-welcome')) return false;
     const now = options.date instanceof Date ? options.date : new Date();
@@ -185,6 +260,6 @@
     return true;
   }
 
-  root.LynnWelcome = {STORAGE_KEY, dayKey, dailyContent, seenToday, show};
+  root.LynnWelcome = {STORAGE_KEY, RELEASE_STORAGE_KEY, dayKey, dailyContent, seenToday, show, showRelease};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.LynnWelcome;
 })(typeof window !== 'undefined' ? window : globalThis);
