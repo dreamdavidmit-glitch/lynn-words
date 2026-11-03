@@ -21,6 +21,7 @@ function daysToBirthday(date=new Date()){let p=Object.fromEntries(new Intl.DateT
 const mascot=()=>birthday()?'mascot-bday.svg':'mascot.svg';
 const MOODS=['今日份努力，已加载 ✨','背完这组就去喝奶茶 🧋','小紫怪正在盯着你 👀','单词不会自己跑进脑子里','今天的你也很可以','手机放下，单词拿起','一个词一个词，慢慢来'];
 function greeting(){let h=new Date().getHours();if(birthday())return '🎂 今天是 Lynn 的生日';if(h>=23||h<5)return '这么晚还在背？背完早点睡 🌙';if(h<9)return '早上好 Lynn，早起的人记性好 ☀️';return mood||(mood=pick(MOODS));}
+function dailyWelcome(){let d=deck(),stats=d?M.stats(d,state.settings):null,st=M.streak(state);window.LynnWelcome?.show({stats,streak:st.count,dailyTarget:state.settings.dailyTarget,batchSize:state.settings.batchSize,hasSession:!!(d?.session&&d.session.phase!=='done'),birthday:birthday()});}
 const POKES=['干嘛戳我！快去背单词 😤','我只是一只小怪兽，不会帮你背的','再戳我就把 abandon 念给你听','嘿嘿，痒～','你戳我十下，就要多背十个词哦','好啦好啦，陪你一起背 💜','Lynn 是全世界最棒的 Lynn！','我的角是用来顶住困意的'];
 const RIGHT=['答对啦！小紫怪原地转圈 🎉','漂亮！这个词已经是你的人了','对！你的大脑今天很在线','稳了稳了，下一个','好厉害，奖励一个虚拟摸摸头','完美，就是这个意思'];
 const WRONG=['没关系，它等下还会来找你','这个词有点调皮，再见一次就好','错一次，记得更牢','小紫怪帮你记在小本本上了'];
@@ -65,6 +66,6 @@ document.addEventListener('drop',e=>{if(route!=='import'||busy||draft)return;e.p
 document.addEventListener('keydown',e=>{if(route!=='study'||e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;let q=sel=>A.querySelector(sel),hit=sel=>{let b=q(sel);if(b&&!b.disabled){e.preventDefault();b.click();return true;}};if(e.key===' '||e.key==='Enter'){if(e.target.tagName==='BUTTON')return;hit('[data-action="reveal"]')||hit('[data-action="learn-next"]')||hit('[data-action="recall"]')||hit('[data-action="quiz-next"]')||hit('[data-action="retry"]');}else if(/^[1-4]$/.test(e.key)){hit(`.choices .choice:nth-child(${e.key})`);}else if(e.key==='r'||e.key==='R'){hit('[data-action="speak"]');}});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){visible();save();Pronunciation.stop();}else if(['home','review'].includes(route))render();});setInterval(()=>{if(!document.hidden&&route==='review'&&!A.querySelector('details[open]'))render();},30000);
 if(birthday())document.title='🎂 生日快乐 Lynn！· Lynn的小词窝';
-try{state=await M.load();if(!state.decks.length)await cet4();render();if(birthday())toast('🎂 今天是 Lynn 的生日！小紫怪准备了一点小惊喜');if(!/Firefox/.test(navigator.userAgent))navigator.storage?.persist?.().catch(()=>{});}catch(err){state=state||M.fresh();error=why(err);render();}
+try{state=await M.load();if(!state.decks.length)await cet4();render();dailyWelcome();if(birthday())toast('🎂 今天是 Lynn 的生日！小紫怪准备了一点小惊喜');if(!/Firefox/.test(navigator.userAgent))navigator.storage?.persist?.().catch(()=>{});}catch(err){state=state||M.fresh();error=why(err);render();dailyWelcome();}
 if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){let reg=()=>navigator.serviceWorker.register('sw.js').catch(()=>{});if(document.readyState==='complete')setTimeout(reg,1500);else window.addEventListener('load',()=>setTimeout(reg,1500),{once:true});}
 })();

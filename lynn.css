@@ -198,3 +198,34 @@ button,a,label,.bday-cake{-webkit-tap-highlight-color:transparent;touch-action:m
 .mistake-list{align-items:start}
 .meaning-lines p{display:flex;align-items:baseline;gap:0}
 .meaning-lines .pos{flex:none}
+
+/* 每日问候 · 一天只来一次的小纸条 */
+body.welcome-open{overflow:hidden}
+.daily-welcome{position:fixed;inset:0;z-index:500;display:grid;place-items:center;padding:max(20px,env(safe-area-inset-top)) max(20px,env(safe-area-inset-right)) max(20px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left));background:#4b315f73;-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);opacity:0;transition:opacity .32s ease}
+.daily-welcome.is-ready{opacity:1}
+.daily-welcome.is-leaving{opacity:0;pointer-events:none}
+.daily-welcome__paper{width:min(920px,100%);max-height:min(720px,calc(100dvh - 40px));display:grid;grid-template-columns:minmax(0,1fr) 250px;overflow:auto;background:#fffafc;border:1px solid #ffffffa8;border-radius:32px;box-shadow:0 32px 90px #34204252;transform:translateY(18px) scale(.985);transition:transform .42s cubic-bezier(.2,.78,.24,1)}
+.daily-welcome.is-ready .daily-welcome__paper{transform:none}
+.daily-welcome__copy{padding:clamp(36px,6vw,72px);display:flex;flex-direction:column;align-items:flex-start;min-width:0}
+.daily-welcome__meta{width:100%;display:flex;justify-content:space-between;gap:18px;padding-bottom:22px;border-bottom:1px solid #eadff0;font-size:10px;letter-spacing:1.7px;color:#aa95b8}
+.daily-welcome__meta time{letter-spacing:.2px;color:#8d779d}
+.daily-welcome__copy h1{margin:clamp(38px,6vh,66px) 0 22px;color:#563d70;font:500 clamp(38px,6vw,64px)/1.22 Georgia,'Songti SC',serif;letter-spacing:-1.5px}
+.daily-welcome__copy h1 span{display:block;color:#b08bbd;font:500 15px/1.4 'PingFang SC','Microsoft YaHei',sans-serif;letter-spacing:2px;margin-bottom:12px}
+.daily-welcome__message{max-width:590px;color:#6f5b79;font:400 clamp(17px,2.4vw,22px)/1.9 Georgia,'Songti SC',serif}
+.daily-welcome__promise{width:100%;margin:32px 0 28px;padding:18px 20px;border-left:3px solid #b493cf;background:#f7eff9;border-radius:0 16px 16px 0}
+.daily-welcome__promise span{display:block;margin-bottom:6px;color:#a283b6;font-size:10px;letter-spacing:1.4px}
+.daily-welcome__promise p{color:#695674;font-size:13px;line-height:1.75}
+.daily-welcome__start{display:inline-flex;align-items:center;justify-content:space-between;gap:30px;min-height:50px;padding:12px 20px 12px 24px;border-radius:999px;background:#7c5aa3;color:#fff;box-shadow:0 10px 24px #7c5aa33b;font-size:13px;font-weight:700;transition:transform .18s,box-shadow .18s,background .18s}
+.daily-welcome__start:hover{transform:translateY(-2px);box-shadow:0 14px 30px #7c5aa34d;background:#6d4b94}
+.daily-welcome__start:focus-visible{outline:3px solid #d9c2ed;outline-offset:4px}
+.daily-welcome__start span:last-child{font-size:19px;font-weight:400}
+.daily-welcome__side{position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:32px 24px 40px;text-align:center;background:linear-gradient(165deg,#eadcf4,#f8deeb 68%,#fff0df);color:#755b83}
+.daily-welcome__side::before{content:'LYNN';position:absolute;top:48px;left:50%;transform:translateX(-50%) rotate(90deg);color:#ffffff60;font:700 70px/1 Georgia,serif;letter-spacing:12px}
+.daily-welcome__side img{position:relative;width:min(210px,100%);margin:auto 0 20px;filter:drop-shadow(0 18px 18px #72518b2d);animation:welcomeFloat 4.6s ease-in-out infinite}
+.daily-welcome__side p{position:relative;font:500 15px/1.75 Georgia,'Songti SC',serif}
+.daily-welcome__side small{position:relative;margin-top:8px;color:#a184aa;font-size:10px}
+.daily-welcome__number{position:absolute;top:24px;right:24px;color:#9476a6;font:500 15px/1 Georgia,serif}
+@keyframes welcomeFloat{0%,100%{transform:translateY(0) rotate(-1deg)}50%{transform:translateY(-8px) rotate(1deg)}}
+@media(max-width:700px){.daily-welcome{padding:12px}.daily-welcome__paper{grid-template-columns:1fr;max-height:calc(100dvh - 24px);border-radius:26px}.daily-welcome__copy{padding:34px 28px 30px}.daily-welcome__meta{padding-bottom:17px}.daily-welcome__copy h1{margin:32px 0 18px;font-size:clamp(36px,12vw,52px)}.daily-welcome__message{font-size:17px;line-height:1.8}.daily-welcome__promise{margin:24px 0 22px}.daily-welcome__start{width:100%}.daily-welcome__side{min-height:145px;display:grid;grid-template-columns:100px 1fr;grid-template-rows:auto auto;gap:2px 16px;padding:18px 24px;text-align:left}.daily-welcome__side::before{display:none}.daily-welcome__side img{grid-row:1/3;width:96px;margin:0}.daily-welcome__side p{font-size:13px}.daily-welcome__side small{margin:0}.daily-welcome__number{top:16px;right:18px;font-size:12px}}
+@media(max-width:390px){.daily-welcome__copy{padding:28px 22px 24px}.daily-welcome__meta{font-size:9px;letter-spacing:1px}.daily-welcome__copy h1{margin-top:26px}.daily-welcome__promise{padding:15px 16px}.daily-welcome__side{grid-template-columns:76px 1fr;min-height:118px;padding:14px 18px}.daily-welcome__side img{width:76px}.daily-welcome__number{display:none}}
+@media(prefers-reduced-motion:reduce){.daily-welcome,.daily-welcome__paper{transition:none}.daily-welcome__side img{animation:none}}
