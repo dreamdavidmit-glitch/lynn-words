@@ -19,7 +19,7 @@ Cloudflare 配置在 `cloudflare/`。部署前需要在 Worker Secrets 中设置
 
 ## 节日主题
 
-`festival.js` 会按上海日期自动识别立冬、冬至、元旦、春节、元宵、清明、端午、七夕、中秋和国庆。可使用 `?festival-preview=lidong` 这类参数预览主题；圣诞周继续由 `christmas.js` 单独管理。
+`festival.js` 会按上海日期自动识别立冬、冬至、元旦、春节、元宵、清明、端午、七夕、中秋和国庆。十个主题各有独立的小紫怪造型、页面配色和可领取的当日祝福；同一天领取后会在本机记住。可使用 `?festival-preview=lidong` 这类参数预览主题；圣诞周继续由 `christmas.js` 单独管理并优先显示。
 
 ## 发布新版本
 

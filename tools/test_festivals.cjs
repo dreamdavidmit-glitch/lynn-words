@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const Festivals = require('../festival.js');
 
 function shanghaiDate(value) {
@@ -24,9 +26,15 @@ for (const [date, expected] of cases) {
 }
 
 assert.equal(Festivals.info(shanghaiDate('2026-11-03')), null, 'ordinary dates should keep the normal theme');
+const mascotPaths = new Set();
 for (const theme of Object.values(Festivals.THEMES)) {
   assert.ok(theme.title && theme.blessing && theme.signOff && theme.ritual, `${theme.slug} copy is incomplete`);
+  assert.ok(theme.mascot, `${theme.slug} needs a mascot`);
+  assert.ok(theme.gift?.label && theme.gift?.title && theme.gift?.message, `${theme.slug} gift is incomplete`);
+  assert.ok(fs.existsSync(path.join(__dirname, '..', theme.mascot)), `${theme.slug} mascot file is missing`);
+  mascotPaths.add(theme.mascot);
   assert.equal(theme.decorations.length, 3, `${theme.slug} needs three decorative marks`);
 }
+assert.equal(mascotPaths.size, Object.keys(Festivals.THEMES).length, 'every festival needs a unique mascot');
 assert.equal(Festivals.THEMES.lidong.mascot, 'assets/festivals/mascot-lidong.png');
 console.log(`Festival calendar OK: ${cases.length} date checks, ${Object.keys(Festivals.THEMES).length} themes`);
