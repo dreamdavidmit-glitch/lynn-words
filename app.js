@@ -23,7 +23,7 @@ const mascot=()=>birthday()?'mascot-bday.svg':christmas()?.mascot||'mascot.svg';
 const MOODS=['今日份努力，已加载 ✨','背完这组就去喝奶茶 🧋','小紫怪正在盯着你 👀','单词不会自己跑进脑子里','今天的你也很可以','手机放下，单词拿起','一个词一个词，慢慢来'];
 function greeting(){let x=window.LynnChristmas?.topGreeting?.();if(x)return x;let h=new Date().getHours();if(birthday())return '🎂 今天是 Lynn 的生日';if(h>=23||h<5)return '这么晚还在背？背完早点睡 🌙';if(h<9)return '早上好 Lynn，早起的人记性好 ☀️';return mood||(mood=pick(MOODS));}
 function dailyWelcome(){let d=deck(),stats=d?M.stats(d,state.settings):null,st=M.streak(state),x=christmas(),date=x?.date;window.LynnWelcome?.show({stats,streak:st.count,dailyTarget:state.settings.dailyTarget,batchSize:state.settings.batchSize,hasSession:!!(d?.session&&d.session.phase!=='done'),birthday:birthday(),christmas:x},date?{date}:{});}
-function openingWelcome(){if(!window.LynnWelcome?.showRelease?.(window.LYNN_RELEASE,dailyWelcome))dailyWelcome();}
+function openingWelcome(){let cloudSetup=location.hash.startsWith('#sync-setup=');if(cloudSetup){window.LynnWelcome?.showRelease?.(window.LYNN_RELEASE,()=>{});return;}if(!window.LynnWelcome?.showRelease?.(window.LYNN_RELEASE,dailyWelcome))dailyWelcome();}
 const POKES=['干嘛戳我！快去背单词 😤','我只是一只小怪兽，不会帮你背的','再戳我就把 abandon 念给你听','嘿嘿，痒～','你戳我十下，就要多背十个词哦','好啦好啦，陪你一起背 💜','Lynn 是全世界最棒的 Lynn！','我的角是用来顶住困意的'];
 const RIGHT=['答对啦！小紫怪原地转圈 🎉','漂亮！这个词已经是你的人了','对！你的大脑今天很在线','稳了稳了，下一个','好厉害，奖励一个虚拟摸摸头','完美，就是这个意思'];
 const WRONG=['没关系，它等下还会来找你','这个词有点调皮，再见一次就好','错一次，记得更牢','小紫怪帮你记在小本本上了'];

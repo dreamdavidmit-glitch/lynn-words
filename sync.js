@@ -8,7 +8,7 @@
   const CLAIM_PREFIX = '#sync-setup=';
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
-  let model, getState, applyState, notify, timer = 0, ready = false, busy = false, pendingRemote = null;
+  let model, getState, applyState, notify, timer = 0, claimOpenTimer = 0, ready = false, busy = false, pendingRemote = null;
   let status = {kind: 'disconnected', text: '仅保存在本机'};
 
   const storage = {
@@ -192,6 +192,19 @@
     layer.querySelector('input')?.focus({preventScroll: true});
   }
 
+  function openAfterWelcome() {
+    clearTimeout(claimOpenTimer);
+    const showWhenClear = () => {
+      if (!claimTokenFromURL()) return;
+      if (root.document?.querySelector('.daily-welcome')) {
+        claimOpenTimer = setTimeout(showWhenClear, 180);
+        return;
+      }
+      open();
+    };
+    claimOpenTimer = setTimeout(showWhenClear, 350);
+  }
+
   function close() { root.document?.querySelector('.sync-modal')?.remove(); root.document?.body?.classList.remove('sync-open'); }
 
   function schedule(state, immediate = false) {
@@ -203,7 +216,7 @@
   let currentState = null;
   async function bootstrap(state) {
     currentState = state; renderBadge();
-    if (claimTokenFromURL()) { setStatus('disconnected', '完成首次云端设置'); setTimeout(open, 250); return state; }
+    if (claimTokenFromURL()) { setStatus('disconnected', '完成首次云端设置'); openAfterWelcome(); return state; }
     if (!token()) { setStatus('disconnected', '仅保存在本机'); return state; }
     try { const next = await reconcile(state); return next; }
     catch (error) { setStatus(navigator.onLine ? 'error' : 'offline', navigator.onLine ? '云端暂时不可用' : '离线中，本机已保存', error.message); return state; }
