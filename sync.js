@@ -216,7 +216,7 @@
   let currentState = null;
   async function bootstrap(state) {
     currentState = state; renderBadge();
-    if (claimTokenFromURL()) { setStatus('disconnected', '完成首次云端设置'); openAfterWelcome(); return state; }
+    if (claimTokenFromURL()) { setStatus('disconnected', '完成首次云端设置'); return state; }
     if (!token()) { setStatus('disconnected', '仅保存在本机'); return state; }
     try { const next = await reconcile(state); return next; }
     catch (error) { setStatus(navigator.onLine ? 'error' : 'offline', navigator.onLine ? '云端暂时不可用' : '离线中，本机已保存', error.message); return state; }
@@ -252,5 +252,5 @@
     root.document.addEventListener('visibilitychange', () => { if (root.document.hidden && token() && ready) push(getState(), meta().revision || 0); });
   }
 
-  root.LynnSync = {init, bootstrap, schedule, flush: () => push(getState(), meta().revision || 0, true), open, status: () => ({...status})};
+  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, status: () => ({...status})};
 })(typeof window !== 'undefined' ? window : globalThis);
