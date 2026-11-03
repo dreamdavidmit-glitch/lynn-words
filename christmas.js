@@ -3,6 +3,10 @@
 
   const TIME_ZONE = 'Asia/Shanghai';
   const APPLE_PREFIX = 'lynn:christmasApple:';
+  const MUSIC_KEY = 'lynn:christmasMusicEnabled';
+  const MUSIC_SRC = 'assets/christmas/jingle-bells.mp3';
+  let music = null;
+  let musicArmed = false;
   const DAYS = {
     24: {stage:'eve',label:'12 / 24 · 平安夜',salutation:'平安夜快乐',name:'童雯凌',title:'今晚，先把平安送给你',blessing:'愿你今晚有热饮、有好梦，也有人把你的平安认真放在心上。',signOff:'平安果已经准备好，只等你收下。'},
     25: {stage:'day',label:'12 / 25 · CHRISTMAS DAY',salutation:'圣诞快乐',name:'Lynn',title:'圣诞节，愿快乐准时抵达',blessing:'愿你的冬天被喜欢的事、想见的人和越来越熟的单词填满。',signOff:'今天可以认真背词，也可以认真开心。'},
@@ -57,6 +61,73 @@
     try { root.localStorage?.setItem(appleKey(season.year), 'received'); } catch (_) {}
     return true;
   }
+  function musicEnabled() {
+    try { return root.localStorage?.getItem(MUSIC_KEY) !== 'off'; }
+    catch (_) { return true; }
+  }
+  function rememberMusic(enabled) {
+    try { root.localStorage?.setItem(MUSIC_KEY, enabled ? 'on' : 'off'); }
+    catch (_) {}
+  }
+  function ensureMusic() {
+    if (!music && typeof root.Audio === 'function') {
+      music = new root.Audio(MUSIC_SRC);
+      music.loop = true;
+      music.preload = 'auto';
+      music.volume = .24;
+      music.setAttribute('playsinline', '');
+    }
+    return music;
+  }
+  function isMusicPlaying() {
+    return !!music && !music.paused && !music.ended;
+  }
+  function syncMusicButton() {
+    if (!root.document) return;
+    const playing = isMusicPlaying();
+    root.document.querySelectorAll('[data-action="christmas-music"]').forEach(button => {
+      button.classList.toggle('is-playing', playing);
+      button.setAttribute('aria-pressed', String(playing));
+      button.innerHTML = `<span aria-hidden="true">${playing?'⏸':'♫'}</span>${playing?'暂停圣诞音乐':'播放圣诞音乐'}`;
+    });
+  }
+  async function startMusic(force = false) {
+    if (!info()) return false;
+    if (force) rememberMusic(true);
+    if (!musicEnabled()) return false;
+    const player = ensureMusic();
+    if (!player) return false;
+    if (isMusicPlaying()) { syncMusicButton(); return true; }
+    try { await player.play(); syncMusicButton(); return true; }
+    catch (_) { return false; }
+  }
+  function pauseMusic(remember = false) {
+    if (music) music.pause();
+    if (remember) rememberMusic(false);
+    syncMusicButton();
+  }
+  async function toggleMusic() {
+    if (!info()) return false;
+    if (isMusicPlaying()) { pauseMusic(true); return false; }
+    rememberMusic(true);
+    const player = ensureMusic();
+    if (!player) return false;
+    try { await player.play(); syncMusicButton(); return true; }
+    catch (_) { return false; }
+  }
+  function armMusic() {
+    if (musicArmed || isMusicPlaying() || !root.document || !musicEnabled()) return;
+    musicArmed = true;
+    const resume = event => {
+      root.document.removeEventListener('pointerdown', resume, true);
+      root.document.removeEventListener('keydown', resume, true);
+      musicArmed = false;
+      if (event?.target?.closest?.('[data-action="christmas-music"]')) return;
+      startMusic();
+    };
+    root.document.addEventListener('pointerdown', resume, {once:true,capture:true});
+    root.document.addEventListener('keydown', resume, {once:true,capture:true});
+  }
   function focusLine(stats, settings = {}) {
     if (!stats) return '先挑一本词本，和小紫怪一起拆开今天的第一份学习礼物。';
     if (stats.due > 0) return `先复习 ${stats.due} 个到期词，再放心拆开今天的新词礼物。`;
@@ -68,13 +139,17 @@
     const season = info();
     if (!season) return '';
     const received = hasApple(season.date);
-    return `<section class="christmas-card christmas-card--${season.stage}" aria-labelledby="christmas-title"><img class="christmas-card__garland" src="assets/christmas/pieces/garland-lights.png" alt="" aria-hidden="true"><div class="christmas-card__copy"><span class="christmas-card__tag">${season.label}</span><h2 id="christmas-title">${season.title}</h2><p class="christmas-card__blessing">${season.blessing}</p><p class="christmas-card__focus">${focusLine(stats,settings)}</p></div><div class="christmas-apple ${received?'is-received':''}"><span class="christmas-apple__fruit" aria-hidden="true">🍎</span><div><strong>${received?'平安果已送达':'有人给你留了一颗平安果'}</strong><p>${received?'愿你新的一年也平平安安、顺顺利利。':'从平安夜开始都可以收下，只送一次，但祝福一直有效。'}</p></div>${received?'<span class="christmas-apple__check" aria-label="已收下">✓</span>':'<button type="button" class="btn christmas-apple__button" data-action="christmas-apple">收下平安果</button>'}</div></section>`;
+    const playing = isMusicPlaying();
+    return `<section class="christmas-card christmas-card--${season.stage}" aria-labelledby="christmas-title"><img class="christmas-card__garland" src="assets/christmas/pieces/garland-lights.png" alt="" aria-hidden="true"><div class="christmas-card__copy"><div class="christmas-card__tools"><span class="christmas-card__tag">${season.label}</span><button type="button" class="christmas-music ${playing?'is-playing':''}" data-action="christmas-music" aria-pressed="${playing}"><span aria-hidden="true">${playing?'⏸':'♫'}</span>${playing?'暂停圣诞音乐':'播放圣诞音乐'}</button></div><h2 id="christmas-title">${season.title}</h2><p class="christmas-card__blessing">${season.blessing}</p><p class="christmas-card__focus">${focusLine(stats,settings)}</p></div><div class="christmas-apple ${received?'is-received':''}"><span class="christmas-apple__fruit" aria-hidden="true">🍎</span><div><strong>${received?'平安果已送达':'有人给你留了一颗平安果'}</strong><p>${received?'愿你新的一年也平平安安、顺顺利利。':'从平安夜开始都可以收下，只送一次，但祝福一直有效。'}</p></div>${received?'<span class="christmas-apple__check" aria-label="已收下">✓</span>':'<button type="button" class="btn christmas-apple__button" data-action="christmas-apple">收下平安果</button>'}</div></section>`;
   }
   function apply(date) {
     const season = info(date);
     if (!root.document) return season;
     root.document.body.classList.remove('christmas-active','christmas-eve','christmas-day','christmas-weekday');
-    if (season) root.document.body.classList.add('christmas-active',season.stage==='eve'?'christmas-eve':season.stage==='day'?'christmas-day':'christmas-weekday');
+    if (season) {
+      root.document.body.classList.add('christmas-active',season.stage==='eve'?'christmas-eve':season.stage==='day'?'christmas-day':'christmas-weekday');
+      armMusic();
+    } else pauseMusic();
     return season;
   }
   function appleBurst() {
@@ -83,6 +158,6 @@
     for (let i=0;i<12;i++) { const apple=root.document.createElement('i'); apple.textContent=i%4===0?'✨':'🍎'; apple.style.setProperty('--x',`${(Math.random()-.5)*260}px`); apple.style.setProperty('--y',`${-80-Math.random()*180}px`); apple.style.setProperty('--r',`${(Math.random()-.5)*180}deg`); apple.style.animationDelay=`${Math.random()*.15}s`; box.appendChild(apple); }
     root.document.body.appendChild(box); root.setTimeout(()=>box.remove(),1800);
   }
-  root.LynnChristmas = {TIME_ZONE,DAYS,parts,effectiveDate,info,topGreeting,hasApple,receiveApple,banner,apply,appleBurst};
+  root.LynnChristmas = {TIME_ZONE,DAYS,parts,effectiveDate,info,topGreeting,hasApple,receiveApple,musicEnabled,isMusicPlaying,startMusic,pauseMusic,toggleMusic,banner,apply,appleBurst};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.LynnChristmas;
 })(typeof window !== 'undefined' ? window : globalThis);

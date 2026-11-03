@@ -156,6 +156,7 @@
     const close = () => {
       if (closed) return;
       closed = true;
+      if (content.christmas) root.LynnChristmas?.startMusic?.();
       try { root.localStorage?.setItem(STORAGE_KEY, content.key); }
       catch (_) {}
       layer.classList.add('is-leaving');
