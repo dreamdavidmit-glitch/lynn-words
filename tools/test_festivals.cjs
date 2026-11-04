@@ -31,6 +31,10 @@ for (const theme of Object.values(Festivals.THEMES)) {
   assert.ok(theme.title && theme.blessing && theme.signOff && theme.ritual, `${theme.slug} copy is incomplete`);
   assert.ok(theme.mascot, `${theme.slug} needs a mascot`);
   assert.ok(theme.gift?.label && theme.gift?.title && theme.gift?.message, `${theme.slug} gift is incomplete`);
+  assert.equal(theme.scene?.length, 5, `${theme.slug} needs five scene elements`);
+  assert.equal(theme.stepMarks?.length, 3, `${theme.slug} needs three study marks`);
+  assert.equal(theme.heroMarks?.length, 2, `${theme.slug} needs two hero marks`);
+  assert.ok(theme.welcomeMark, `${theme.slug} needs a welcome mark`);
   assert.ok(fs.existsSync(path.join(__dirname, '..', theme.mascot)), `${theme.slug} mascot file is missing`);
   mascotPaths.add(theme.mascot);
   assert.equal(theme.decorations.length, 3, `${theme.slug} needs three decorative marks`);

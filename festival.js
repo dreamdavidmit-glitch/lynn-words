@@ -85,6 +85,21 @@
     }
   };
 
+  const SCENES = {
+    lidong: {scene: ['❄', '🧶', '☕', '♨', '松'], stepMarks: ['❄', '☕', '🧣'], heroMarks: ['❄', '♨'], welcomeMark: '暖'},
+    dongzhi: {scene: ['☀', '🥣', '○', '♨', '冬'], stepMarks: ['🥟', '☀', '♨'], heroMarks: ['☀', '○'], welcomeMark: '圆'},
+    newyear: {scene: ['✦', '2027', '✧', '✺', '愿'], stepMarks: ['✦', '2027', '愿'], heroMarks: ['✺', '✧'], welcomeMark: '新'},
+    spring: {scene: ['🏮', '福', '❀', '🧧', '春'], stepMarks: ['🧧', '福', '❀'], heroMarks: ['福', '❀'], welcomeMark: '春'},
+    lantern: {scene: ['🏮', '○', '✨', '灯', '月'], stepMarks: ['🏮', '○', '✨'], heroMarks: ['🏮', '○'], welcomeMark: '灯'},
+    qingming: {scene: ['☂', '雨', '燕', '🌱', '柳'], stepMarks: ['🌱', '雨', '燕'], heroMarks: ['☂', '燕'], welcomeMark: '青'},
+    dragonboat: {scene: ['〰', '粽', '舟', '🍃', '鼓'], stepMarks: ['粽', '舟', '🍃'], heroMarks: ['〰', '粽'], welcomeMark: '舟'},
+    qixi: {scene: ['✦', '♡', '鹊', '银河', '✧'], stepMarks: ['✦', '♡', '鹊'], heroMarks: ['✦', '♡'], welcomeMark: '星'},
+    midautumn: {scene: ['🌕', '☁', '桂', '兔', '月'], stepMarks: ['🌕', '桂', '兔'], heroMarks: ['🌕', '☁'], welcomeMark: '月'},
+    national: {scene: ['⭐', '山河', '✦', '云', '路'], stepMarks: ['⭐', '山河', '路'], heroMarks: ['⭐', '山河'], welcomeMark: '行'}
+  };
+  Object.entries(SCENES).forEach(([slug, scene]) => Object.assign(THEMES[slug], scene));
+  const STYLE_VARS = ['--festival-step-1', '--festival-step-2', '--festival-step-3', '--festival-hero-before', '--festival-hero-after', '--festival-welcome-mark'];
+
   function parts(date = new Date()) {
     const values = Object.fromEntries(new Intl.DateTimeFormat('en-US', {timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit'}).formatToParts(date).map(part => [part.type, part.value]));
     return {year: Number(values.year), month: Number(values.month), day: Number(values.day)};
@@ -154,7 +169,7 @@
     const festival = info();
     if (!festival) return '';
     const got = received(festival);
-    return `<section class="festival-card festival-card--${festival.slug}" aria-labelledby="festival-title"><div class="festival-card__decor" aria-hidden="true">${festival.decorations.map(item => `<span>${escapeHTML(item)}</span>`).join('')}</div><div class="festival-card__copy"><span class="festival-card__tag">${escapeHTML(festival.label)}</span><h2 id="festival-title">${escapeHTML(festival.title)}</h2><p class="festival-card__blessing">${escapeHTML(festival.blessing)}</p><p class="festival-card__ritual">${escapeHTML(festival.ritual)}</p><p class="festival-card__focus">${escapeHTML(focusLine(stats, settings))}</p><button type="button" class="festival-card__gift${got ? ' is-received' : ''}" data-action="festival-gift">${got ? '今天的祝福已收好 ✓' : `${festival.icon} ${escapeHTML(festival.gift.label)}`}</button></div></section>`;
+    return `<section class="festival-card festival-card--${festival.slug}" aria-labelledby="festival-title"><div class="festival-card__scene" aria-hidden="true">${festival.scene.map((item, index) => `<span class="scene-${index + 1}">${escapeHTML(item)}</span>`).join('')}</div><div class="festival-card__copy"><span class="festival-card__tag">${escapeHTML(festival.label)}</span><h2 id="festival-title">${escapeHTML(festival.title)}</h2><p class="festival-card__blessing">${escapeHTML(festival.blessing)}</p><p class="festival-card__ritual">${escapeHTML(festival.ritual)}</p><p class="festival-card__focus">${escapeHTML(focusLine(stats, settings))}</p><button type="button" class="festival-card__gift${got ? ' is-received' : ''}" data-action="festival-gift">${got ? '今天的祝福已收好 ✓' : `${festival.icon} ${escapeHTML(festival.gift.label)}`}</button></div></section>`;
   }
 
   function giftKey(festival) { return `lynn:festival-gift:${festival.welcomeKey}`; }
@@ -186,11 +201,17 @@
   function apply(date) {
     const festival = info(date);
     if (!root.document) return festival;
-    Array.from(root.document.body.classList).forEach(name => { if (name === 'festival-active' || name.startsWith('festival-')) root.document.body.classList.remove(name); });
+    const body = root.document.body;
+    Array.from(body.classList).forEach(name => { if (name === 'festival-active' || name.startsWith('festival-')) body.classList.remove(name); });
+    STYLE_VARS.forEach(name => body.style.removeProperty(name));
     if (festival) {
-      root.document.body.classList.add('festival-active', `festival-${festival.slug}`);
-      root.document.body.dataset.festival = festival.slug;
-    } else delete root.document.body.dataset.festival;
+      body.classList.add('festival-active', `festival-${festival.slug}`);
+      body.dataset.festival = festival.slug;
+      festival.stepMarks.forEach((mark, index) => body.style.setProperty(`--festival-step-${index + 1}`, JSON.stringify(mark)));
+      body.style.setProperty('--festival-hero-before', JSON.stringify(festival.heroMarks[0]));
+      body.style.setProperty('--festival-hero-after', JSON.stringify(festival.heroMarks[1]));
+      body.style.setProperty('--festival-welcome-mark', JSON.stringify(festival.welcomeMark));
+    } else delete body.dataset.festival;
     return festival;
   }
 

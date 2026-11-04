@@ -261,13 +261,21 @@ body.festival-active .brand-mark,body.festival-active .nav button.active{backgro
 body.festival-active .btn:not(.secondary):not(.ghost):not(.choice):not(.danger){background:linear-gradient(135deg,var(--festival-accent),var(--festival-deep));border-color:transparent;box-shadow:0 7px 18px var(--festival-shadow)}
 body.festival-active .progress-fill{background:linear-gradient(90deg,var(--festival-accent),var(--festival-highlight),var(--festival-deep))}
 body.festival-active .tag{background:var(--festival-soft);color:var(--festival-deep)}
-body.festival-active .hero{background:var(--festival-hero);border:1px solid var(--festival-line)}
+body.festival-active .hero{background:radial-gradient(circle at 78% 22%,var(--festival-glow) 0 10%,transparent 25%),radial-gradient(circle at 88% 78%,var(--festival-glow-2) 0 8%,transparent 23%),var(--festival-hero);border:1px solid var(--festival-line)}
 body.festival-active .hero h1{color:var(--festival-deep)}
 body.festival-active .hero h1 em{background:linear-gradient(90deg,var(--festival-deep),var(--festival-accent),var(--festival-highlight));-webkit-background-clip:text;background-clip:text;color:transparent}
-body.festival-active .hero::before,body.festival-active .hero::after{color:var(--festival-highlight)}
+body.festival-active .hero::before{content:var(--festival-hero-before,'✦');left:45%;top:24px;color:var(--festival-highlight);font-size:30px;text-shadow:0 8px 18px var(--festival-shadow);animation:festivalDrift 4s ease-in-out infinite}
+body.festival-active .hero::after{content:var(--festival-hero-after,'✧');left:52%;bottom:30px;color:var(--festival-highlight);font-size:23px;text-shadow:0 8px 18px var(--festival-shadow);animation:festivalDrift 4.8s ease-in-out -1.2s infinite}
 body.festival-active .mascot-btn img{width:min(100%,265px);max-height:330px;object-fit:contain;filter:drop-shadow(0 18px 20px var(--festival-shadow))}
 body.festival-active .bubble{border-color:var(--festival-line);color:var(--festival-deep)}
 body.festival-active .today-card,body.festival-active .study-side,body.festival-active .recall-card{background:linear-gradient(135deg,var(--festival-white),var(--festival-soft))}
+body.festival-active .today-card{position:relative;isolation:isolate;overflow:hidden;padding-right:112px}
+body.festival-active .today-card::after{content:var(--festival-welcome-mark,'✦');position:absolute;z-index:-1;right:26px;top:50%;transform:translateY(-50%) rotate(-8deg);color:var(--festival-accent);opacity:.13;font:700 78px/1 Georgia,'Songti SC',serif}
+body.festival-active .step{position:relative;isolation:isolate;overflow:hidden;min-height:128px;padding-right:74px}
+body.festival-active .step::after{position:absolute;z-index:-1;right:12px;top:18px;color:var(--festival-accent);opacity:.2;font:700 48px/1 Georgia,'Songti SC',serif;filter:drop-shadow(0 8px 12px var(--festival-shadow))}
+body.festival-active .step:nth-child(1)::after{content:var(--festival-step-1,'✦')}
+body.festival-active .step:nth-child(2)::after{content:var(--festival-step-2,'✧')}
+body.festival-active .step:nth-child(3)::after{content:var(--festival-step-3,'○')}
 
 .festival-card{position:relative;isolation:isolate;overflow:hidden;margin:0 0 24px;padding:38px 42px;border:1px solid #ffffff75;border-radius:30px;color:var(--festival-card-ink);background:var(--festival-card);box-shadow:0 22px 55px var(--festival-shadow)}
 .festival-card::before{content:'';position:absolute;inset:0;z-index:-1;background:radial-gradient(circle at 14% 12%,#ffffff20 0 2px,transparent 2.5px) 0 0/46px 46px}
@@ -277,8 +285,11 @@ body.festival-active .today-card,body.festival-active .study-side,body.festival-
 .festival-card__blessing{max-width:760px;color:var(--festival-card-ink);font-size:15px;line-height:1.95}
 .festival-card__ritual{display:inline-block;margin-top:17px;padding:9px 13px;border-radius:12px;background:#160f1d24;color:var(--festival-card-ink);font-size:11px;line-height:1.7}
 .festival-card__focus{margin-top:13px;color:var(--festival-card-soft);font-size:11px;line-height:1.7}
-.festival-card__decor{position:absolute;right:30px;top:50%;z-index:1;display:flex;gap:18px;align-items:center;transform:translateY(-50%) rotate(-7deg);opacity:.23;font:600 clamp(34px,6vw,76px)/1 Georgia,'Songti SC',serif;pointer-events:none}
-.festival-card__decor span:nth-child(2){transform:translateY(-28px);font-size:.72em}.festival-card__decor span:nth-child(3){transform:translateY(25px);font-size:.65em}
+.festival-card__scene{position:absolute;inset:0;z-index:1;overflow:hidden;pointer-events:none}
+.festival-card__scene::after{content:'';position:absolute;right:-80px;bottom:-78px;width:440px;height:168px;border:1px solid #ffffff30;border-radius:50%;background:linear-gradient(180deg,#ffffff0c,#ffffff18);transform:rotate(-7deg)}
+.festival-card__scene span{position:absolute;color:var(--festival-card-title);opacity:.5;font:700 clamp(28px,5vw,66px)/1 Georgia,'Songti SC',serif;text-shadow:0 12px 28px #170d1955;animation:festivalDrift 5s ease-in-out infinite}
+.festival-card__scene .scene-1{right:92px;top:38px}.festival-card__scene .scene-2{right:22px;bottom:42px;font-size:clamp(24px,4vw,52px);animation-delay:-1.2s}.festival-card__scene .scene-3{right:270px;bottom:24px;font-size:clamp(22px,3.2vw,42px);animation-delay:-2.6s}.festival-card__scene .scene-4{right:236px;top:27px;font-size:clamp(18px,2.6vw,34px);animation-delay:-3.4s}.festival-card__scene .scene-5{right:34px;top:108px;font-size:clamp(17px,2.4vw,31px);animation-delay:-.7s}
+@keyframes festivalDrift{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-8px) rotate(3deg)}}
 .festival-card__gift{display:inline-flex;align-items:center;justify-content:center;min-height:39px;margin-top:18px;padding:9px 15px;border:1px solid #ffffff52;border-radius:999px;background:#fffdf527;color:var(--festival-card-ink);font-size:11px;font-weight:750;box-shadow:0 8px 20px #20132520;transition:transform .2s,background .2s,box-shadow .2s}
 .festival-card__gift:hover{transform:translateY(-2px);background:#fffdf53d;box-shadow:0 12px 26px #2013252d}.festival-card__gift.is-received{background:#fffdf51b;color:var(--festival-card-soft)}
 
@@ -307,12 +318,14 @@ body.festival-national{--festival-bg:#fff8f3;--festival-white:#fffefd;--festival
 .daily-welcome.is-festival .daily-welcome__start{background:linear-gradient(135deg,var(--festival-accent),var(--festival-deep));box-shadow:0 10px 24px var(--festival-shadow)}
 .daily-welcome.is-festival .daily-welcome__side{background:var(--festival-hero)}
 .daily-welcome.is-festival .daily-welcome__side::before{display:none}
+.daily-welcome.is-festival .daily-welcome__side::after{content:var(--festival-welcome-mark,'节');position:absolute;right:12px;bottom:8px;color:var(--festival-accent);opacity:.12;font:700 96px/1 Georgia,'Songti SC',serif;transform:rotate(-9deg)}
 .daily-welcome.is-festival .daily-welcome__side img{position:relative;z-index:2;width:min(220px,100%);max-height:315px;object-fit:contain}
 .daily-welcome__festival-word{position:absolute;top:50px;left:50%;transform:translateX(-50%) rotate(90deg);color:#ffffff80;font:700 56px/1 Georgia,'Songti SC',serif;letter-spacing:10px;white-space:nowrap}
 body.festival-lidong .mascot-btn img,body.festival-lidong .sidebar-note img{object-fit:contain}
 
-@media(max-width:800px){.festival-card{padding:34px 28px}.festival-card__decor{right:12px;opacity:.15}.festival-card h2{font-size:31px}}
-@media(max-width:520px){.festival-card{padding:29px 21px;border-radius:24px}.festival-card h2{font-size:26px}.festival-card__blessing{font-size:13px}.festival-card__ritual,.festival-card__focus{font-size:10px}.festival-card__decor{top:25px;right:8px;transform:none;font-size:34px}.festival-card__gift{width:100%}.festival-gift-dialog{padding:25px 22px 29px;border-radius:25px}.festival-gift-dialog img{width:128px;height:145px}.festival-gift-dialog h2{font-size:25px}.daily-welcome.is-festival .daily-welcome__side img{width:94px;height:108px}.daily-welcome__festival-word{display:none}}
+@media(max-width:800px){.festival-card{padding:34px 28px}.festival-card__scene{opacity:.82}.festival-card h2{font-size:31px}body.festival-active .today-card{padding-right:92px}}
+@media(max-width:520px){.festival-card{padding:29px 21px;border-radius:24px}.festival-card h2{font-size:26px}.festival-card__blessing{font-size:13px}.festival-card__ritual,.festival-card__focus{font-size:10px}.festival-card__scene{opacity:.78}.festival-card__scene .scene-1{right:15px;top:76px}.festival-card__scene .scene-2{right:12px;bottom:92px}.festival-card__scene .scene-3,.festival-card__scene .scene-5{display:none}.festival-card__scene .scene-4{right:20px;top:18px}.festival-card__gift{width:100%}.festival-gift-dialog{padding:25px 22px 29px;border-radius:25px}.festival-gift-dialog img{width:128px;height:145px}.festival-gift-dialog h2{font-size:25px}body.festival-active .hero::before{left:12%;top:22px}body.festival-active .hero::after{left:auto;right:9%;bottom:24px}body.festival-active .today-card{padding-right:20px}body.festival-active .today-card::after{right:16px;top:28px;font-size:48px}body.festival-active .step{min-height:105px;padding-right:62px}body.festival-active .step::after{right:10px;top:18px;font-size:39px}.daily-welcome.is-festival .daily-welcome__side img{width:94px;height:108px}.daily-welcome.is-festival .daily-welcome__side::after{font-size:66px}.daily-welcome__festival-word{display:none}}
+@media(prefers-reduced-motion:reduce){body.festival-active .hero::before,body.festival-active .hero::after,.festival-card__scene span{animation:none}}
 
 /* 圣诞周：仅 12 月 24–30 日由 christmas.js 启用 */
 body.christmas-active{--paper:#fff9f2;--ink:#4d3038;--muted:#927b7e;--primary:#a93348;--primary-deep:#75283a;--soft:#f8e8df;--line:#ead8cb;--gold:#e7b54e;--shadow:0 18px 46px #64263318}
