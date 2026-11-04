@@ -20,5 +20,7 @@ for (const [month, day] of [[11, 23], [11, 31], [0, 1], [6, 25]]) {
 
 const audio = path.join(__dirname, '..', 'assets', 'christmas', 'jingle-bells.mp3');
 assert.ok(fs.statSync(audio).size > 100_000, 'Christmas audio should be present and non-empty');
+const tree = path.join(__dirname, '..', 'assets', 'christmas', 'christmas-tree.png');
+assert.ok(fs.statSync(tree).size > 100_000, 'Christmas tree should be present and non-empty');
 
-console.log('Christmas date guard and audio asset OK');
+console.log('Christmas date guard, audio, and tree asset OK');

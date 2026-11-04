@@ -327,9 +327,9 @@ body.christmas-active .nav button.active{background:linear-gradient(135deg,#a933
 body.christmas-active .btn:not(.secondary):not(.ghost):not(.choice):not(.danger){background:linear-gradient(135deg,#aa3349,#7d263a);border-color:transparent;box-shadow:0 7px 18px #8d2f4030}
 body.christmas-active .progress-fill{background:linear-gradient(90deg,#3f7654,#d3a33c,#b6384c)}
 body.christmas-active .tag{background:#f7e8df;color:#7b3442}
-body.christmas-active .hero{background:linear-gradient(130deg,#fff6e9,#f9e8e3 55%,#e8f1e3);border:1px solid #ead8cb}
-body.christmas-day .hero{background:linear-gradient(130deg,#fff8dc,#fbe6dd 58%,#edf3df)}
-body.christmas-weekday .hero{background:linear-gradient(130deg,#f8f0f8,#f5ebe5 58%,#e6efe5)}
+body.christmas-active .hero{background:url('assets/christmas/pieces/corner-holly.png') no-repeat right 4px top 4px/145px,linear-gradient(130deg,#fff6e9,#f9e8e3 55%,#e8f1e3);border:1px solid #ead8cb}
+body.christmas-day .hero{background:url('assets/christmas/pieces/corner-holly.png') no-repeat right 4px top 4px/145px,linear-gradient(130deg,#fff8dc,#fbe6dd 58%,#edf3df)}
+body.christmas-weekday .hero{background:url('assets/christmas/pieces/corner-holly.png') no-repeat right 4px top 4px/145px,linear-gradient(130deg,#f8f0f8,#f5ebe5 58%,#e6efe5)}
 body.christmas-active .hero h1{color:#6d2c3a}
 body.christmas-active .hero h1 em{background:linear-gradient(90deg,#9d2e42,#bc7045,#386f4d);-webkit-background-clip:text;background-clip:text;color:transparent}
 body.christmas-active .hero::before{content:'✦';color:#e2b64e}
@@ -338,6 +338,11 @@ body.christmas-active .mascot-btn img{width:min(100%,255px);max-height:315px;obj
 body.christmas-active .sidebar-note img{max-height:138px;object-fit:contain}
 body.christmas-active .photo-frame{display:none}
 body.christmas-active .bubble{border-color:#e8d0c2;color:#7c3442}
+body.christmas-active .today-card{background:url('assets/christmas/pieces/corner-ornament.png') no-repeat right 12px top 10px/105px,linear-gradient(135deg,#fffdf8,#f8eee7 58%,#edf4e8);padding-right:120px}
+body.christmas-active .step{min-height:132px;padding-right:82px;background-repeat:no-repeat;background-position:right 8px top 13px;background-size:68px auto}
+body.christmas-active .step:nth-child(1){background-image:url('assets/christmas/pieces/book-holly.png')}
+body.christmas-active .step:nth-child(2){background-image:url('assets/christmas/pieces/flashcards-ribbon.png')}
+body.christmas-active .step:nth-child(3){background-image:url('assets/christmas/pieces/review-clock.png')}
 @keyframes christmasSnow{to{background-position:0 196px,24px 168px}}
 
 .christmas-card{position:relative;isolation:isolate;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(270px,.75fr);gap:34px;align-items:end;margin:0 0 24px;padding:48px 42px 34px;border-radius:30px;color:#fff;background:linear-gradient(135deg,#4b1725,#753044 52%,#244e39);box-shadow:0 22px 55px #54253632}
@@ -356,6 +361,11 @@ body.christmas-active .bubble{border-color:#e8d0c2;color:#7c3442}
 .christmas-card h2{max-width:620px;margin:0 0 12px;color:#fff7e9;font:500 clamp(27px,3.5vw,42px)/1.35 Georgia,'Songti SC',serif}
 .christmas-card__blessing{max-width:620px;color:#fff9f0;font-size:15px;line-height:1.9}
 .christmas-card__focus{display:inline-block;margin-top:18px;padding:9px 13px;border-radius:12px;background:#170b102b;color:#f8e8de;font-size:11px;line-height:1.7}
+.christmas-card__aside{position:relative;z-index:2;min-height:310px;display:flex;align-items:flex-end}
+.christmas-card__scene{position:absolute;inset:-42px -2px 70px 0;display:grid;place-items:center;pointer-events:none}
+.christmas-card__tree{width:178px;max-height:245px;object-fit:contain;filter:drop-shadow(0 18px 24px #150b103d);animation:treeGlow 3s ease-in-out infinite}
+.christmas-card__star{position:absolute;right:26px;top:26px;color:#ffe59a;font-size:22px;text-shadow:0 0 18px #ffd859;animation:starTwinkle 1.8s ease-in-out infinite}
+.christmas-card__snow{position:absolute;color:#fff8e9;opacity:.72;text-shadow:0 0 9px #fff}.christmas-card__snow.snow-a{left:9px;top:65px;font-size:18px}.christmas-card__snow.snow-b{right:4px;bottom:33px;font-size:14px}
 .christmas-apple{position:relative;z-index:2;display:grid;grid-template-columns:62px 1fr;gap:5px 14px;align-items:center;padding:20px;border:1px solid #ffffff3d;border-radius:22px;background:#fffaf1ed;color:#5d2e37;box-shadow:0 14px 32px #1f0d1430;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
 .christmas-apple__fruit{grid-row:1/3;display:grid;place-items:center;width:62px;height:62px;border-radius:50%;background:#f8e0d8;font-size:37px;filter:drop-shadow(0 5px 8px #8d28362e)}
 .christmas-apple strong{display:block;color:#74283a;font-size:14px}
@@ -366,6 +376,8 @@ body.christmas-active .bubble{border-color:#e8d0c2;color:#7c3442}
 .apple-burst{position:fixed;left:50%;top:58%;z-index:900;pointer-events:none}
 .apple-burst i{position:absolute;font-style:normal;font-size:27px;animation:appleFly 1.55s cubic-bezier(.2,.78,.24,1) forwards}
 @keyframes appleFly{0%{opacity:0;transform:translate(0,0) scale(.4)}15%{opacity:1}100%{opacity:0;transform:translate(var(--x),var(--y)) rotate(var(--r)) scale(1)}}
+@keyframes treeGlow{0%,100%{filter:drop-shadow(0 18px 24px #150b103d)}50%{filter:drop-shadow(0 18px 28px #f0c85c45)}}
+@keyframes starTwinkle{0%,100%{transform:scale(.88) rotate(-4deg);opacity:.58}50%{transform:scale(1.16) rotate(5deg);opacity:1}}
 
 .daily-welcome.is-christmas{background:#351b256e}
 .daily-welcome.is-christmas .daily-welcome__paper{border-color:#f1d8c4;background:#fffaf3;box-shadow:0 34px 100px #35121e5c}
@@ -376,11 +388,11 @@ body.christmas-active .bubble{border-color:#e8d0c2;color:#7c3442}
 .daily-welcome.is-christmas .daily-welcome__promise span{color:#4a7658}
 .daily-welcome.is-christmas .daily-welcome__start{background:#9e3044;box-shadow:0 10px 24px #8d2b3c42}
 .daily-welcome.is-christmas-day .daily-welcome__start{background:#9c6330}
-.daily-welcome.is-christmas .daily-welcome__side{background:linear-gradient(165deg,#f7e3dd,#f0e9d8 66%,#dcebd9)}
-.daily-welcome.is-christmas-day .daily-welcome__side{background:linear-gradient(165deg,#fff0d1,#f7dfd8 62%,#e6edcf)}
+.daily-welcome.is-christmas .daily-welcome__side{background:url('assets/christmas/christmas-tree.png') no-repeat right -22px bottom -18px/118px,linear-gradient(165deg,#f7e3dd,#f0e9d8 66%,#dcebd9)}
+.daily-welcome.is-christmas-day .daily-welcome__side{background:url('assets/christmas/christmas-tree.png') no-repeat right -22px bottom -18px/118px,linear-gradient(165deg,#fff0d1,#f7dfd8 62%,#e6edcf)}
 .daily-welcome.is-christmas .daily-welcome__side::before{content:'NOËL';color:#ffffff80;font-size:56px}
 .daily-welcome.is-christmas .daily-welcome__side img{width:min(220px,100%);max-height:310px;object-fit:contain}
 
-@media(max-width:800px){.christmas-card{grid-template-columns:1fr;padding:42px 28px 28px}.christmas-card__garland{width:70%;height:130px;opacity:.55}.christmas-apple{max-width:520px}.christmas-card h2{font-size:32px}}
-@media(max-width:520px){.christmas-card{padding:38px 20px 22px;border-radius:24px;gap:22px}.christmas-card__garland{width:92%;right:-60px;top:-34px}.christmas-card h2{font-size:27px}.christmas-card__blessing{font-size:13px}.christmas-card__focus{font-size:10px}.christmas-apple{grid-template-columns:50px 1fr;padding:16px}.christmas-apple__fruit{width:50px;height:50px;font-size:30px}.daily-welcome.is-christmas .daily-welcome__side img{width:90px;height:100px}}
-@media(prefers-reduced-motion:reduce){body.christmas-active::after,.christmas-music.is-playing span{animation:none}.apple-burst{display:none}}
+@media(max-width:800px){.christmas-card{grid-template-columns:1fr;padding:42px 28px 28px}.christmas-card__garland{width:70%;height:130px;opacity:.55}.christmas-card__aside{min-height:300px;max-width:520px}.christmas-card__scene{inset:-34px 0 72px}.christmas-apple{width:100%}.christmas-card h2{font-size:32px}body.christmas-active .today-card{padding-right:110px}}
+@media(max-width:520px){.christmas-card{padding:38px 20px 22px;border-radius:24px;gap:18px}.christmas-card__garland{width:92%;right:-60px;top:-34px}.christmas-card h2{font-size:27px}.christmas-card__blessing{font-size:13px}.christmas-card__focus{font-size:10px}.christmas-card__aside{min-height:292px}.christmas-card__scene{inset:-26px 0 88px}.christmas-card__tree{width:154px;max-height:210px}.christmas-card__star{right:23%;top:18px}.christmas-apple{grid-template-columns:50px 1fr;padding:16px}.christmas-apple__fruit{width:50px;height:50px;font-size:30px}body.christmas-active .hero{background-size:96px,auto}body.christmas-active .today-card{padding-right:20px;background-size:72px,auto}body.christmas-active .step{min-height:112px;padding-right:70px;background-size:54px auto}.daily-welcome.is-christmas .daily-welcome__side{background-size:78px,auto}.daily-welcome.is-christmas .daily-welcome__side img{width:90px;height:100px}}
+@media(prefers-reduced-motion:reduce){body.christmas-active::after,.christmas-music.is-playing span,.christmas-card__tree,.christmas-card__star{animation:none}.apple-burst{display:none}}
