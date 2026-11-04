@@ -1,6 +1,7 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const MAX_PAYLOAD = 1_900_000;
+const MAX_DECOMPRESSED_PAYLOAD = 24_000_000;
 const PASSWORD_ITERATIONS = 100_000;
 const ADMIN_PASSWORD_ITERATIONS = 100_000;
 const USER_TOKEN_LIFETIME_SECONDS = 180 * 24 * 60 * 60;
@@ -81,9 +82,20 @@ function blobValue(value) {
 
 async function stateSummaryFromPayload(payload, encoding) {
   const bytes = blobValue(payload);
-  const text = encoding === 'gzip'
-    ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
-    : decoder.decode(bytes);
+  let text;
+  if (encoding === 'gzip') {
+    const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader(), chunks = [];
+    let total = 0;
+    while (true) {
+      const {done, value} = await reader.read(); if (done) break;
+      total += value.byteLength;
+      if (total > MAX_DECOMPRESSED_PAYLOAD) { await reader.cancel(); throw new Error('快照解压后超过安全大小。'); }
+      chunks.push(value);
+    }
+    const combined = new Uint8Array(total); let offset = 0;
+    for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.byteLength; }
+    text = decoder.decode(combined);
+  } else text = decoder.decode(bytes);
   const parsed = JSON.parse(text), state = parsed?.state;
   if (!state || !Array.isArray(state.decks)) throw new Error('快照中的学习记录无法读取。');
   let words = 0, seen = 0, attempts = 0, remembered = 0;
@@ -95,7 +107,14 @@ async function stateSummaryFromPayload(payload, encoding) {
       if ((Number(progress?.longTermSuccesses) || 0) > 0) remembered++;
     }
   }
-  return {decks: state.decks.length, words, seen, attempts, remembered, studyDays: Array.isArray(state.studyDays) ? state.studyDays.length : 0};
+  const studyDates = [...new Set(Array.isArray(state.studyDays) ? state.studyDays.filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value)) : [])].sort();
+  let streak = 0;
+  if (studyDates.length) {
+    let cursor = studyDates[studyDates.length - 1];
+    const known = new Set(studyDates);
+    while (known.has(cursor)) { streak++; const date = new Date(cursor + 'T12:00:00Z'); date.setUTCDate(date.getUTCDate() - 1); cursor = date.toISOString().slice(0, 10); }
+  }
+  return {decks: state.decks.length, words, seen, attempts, remembered, studyDays: studyDates.length, streak};
 }
 
 async function bodyJSON(request) {
@@ -233,11 +252,17 @@ async function adminPreviewSnapshot(request, env, id) {
   if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error: '历史记录编号无效。'}, 400);
   const [snapshot, current] = await Promise.all([
     env.DB.prepare('SELECT id, revision, created_at, device_id, encoding, payload FROM progress_snapshots WHERE id = ?').bind(id).first(),
-    env.DB.prepare('SELECT revision FROM sync_state WHERE id = 1').first()
+    env.DB.prepare('SELECT revision, encoding, payload FROM sync_state WHERE id = 1').first()
   ]);
   if (!snapshot) return json(request, env, {error: '这份历史记录已经不在最近 7 次之内。'}, 404);
   const summary = await stateSummaryFromPayload(snapshot.payload, snapshot.encoding);
-  return json(request, env, {id: Number(snapshot.id), revision: Number(snapshot.revision), createdAt: snapshot.created_at, deviceId: snapshot.device_id, current: Number(snapshot.revision) === Number(current?.revision), ...summary});
+  const isCurrent = Number(snapshot.revision) === Number(current?.revision);
+  let changes = {seen: 0, remembered: 0, attempts: 0, studyDays: 0};
+  if (current && !isCurrent) {
+    const currentSummary = await stateSummaryFromPayload(current.payload, current.encoding);
+    changes = {seen: summary.seen - currentSummary.seen, remembered: summary.remembered - currentSummary.remembered, attempts: summary.attempts - currentSummary.attempts, studyDays: summary.studyDays - currentSummary.studyDays};
+  }
+  return json(request, env, {id: Number(snapshot.id), revision: Number(snapshot.revision), createdAt: snapshot.created_at, deviceId: snapshot.device_id, current: isCurrent, changes, ...summary});
 }
 
 async function adminRestoreSnapshot(request, env) {

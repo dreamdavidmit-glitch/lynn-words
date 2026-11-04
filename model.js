@@ -5,7 +5,7 @@
   const DB_NAME = 'wordsequence-public-v1';
   const STORE_NAME = 'records';
   const LONG_TERM_GAP_MS = 8 * 60 * 60 * 1000;
-  const DEFAULT_SETTINGS = Object.freeze({dailyTarget: 30, batchSize: 10, delayMinutes: 20, rate: 1, accent: 'en-US', voiceURI: '', autoPlay: true, autoAdvance: true});
+  const DEFAULT_SETTINGS = Object.freeze({dailyTarget: 30, batchSize: 10, delayMinutes: 20, rate: 1, accent: 'en-US', voiceURI: '', autoPlay: true, autoAdvance: false});
   const SLOW_RESPONSE_MS = 8000;
   const MAX_WORDS = 50000, MAX_DECK_WORDS = 20000, MAX_DECKS = 100;
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);

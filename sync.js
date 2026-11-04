@@ -47,6 +47,12 @@
     catch (_) { return ''; }
   }
 
+  function changeText(changes = {}) {
+    const items = [['seen', '已学词'], ['remembered', '真正记住'], ['attempts', '练习次数'], ['studyDays', '学习天数']];
+    const parts = items.filter(([key]) => Number(changes[key])).map(([key, label]) => `${label}${changes[key] > 0 ? '多' : '少'} ${Math.abs(changes[key])}`);
+    return parts.length ? `与当前相比：${parts.join('，')}` : '与当前记录没有统计差异';
+  }
+
   function renderBadge() {
     let button = root.document?.querySelector('.sync-pill');
     if (!button && root.document?.body) {
@@ -245,7 +251,7 @@
       if (!adminToken()) return `<form class="sync-dialog" data-sync-form="admin-auth" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button type="button" class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">🛟</div><span class="tag">管理员权限</span><h2 id="sync-title">打开云端进度保险箱</h2><p>验证后可以查看最近 7 次自动快照，并把 Lynn 的进度恢复到其中任意一次。</p><label class="field">管理员密码<input name="password" type="password" maxlength="128" autocomplete="current-password" required></label><button class="btn" type="submit">验证并查看历史</button><small>连续输错 5 次会暂时锁定 15 分钟。</small></form>`;
       if (!adminSnapshots) return `<div class="sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">🛟</div><h2 id="sync-title">正在读取进度快照…</h2><p>小紫怪正在检查最近 7 次云端记录。</p></div>`;
       const snapshots = adminSnapshots.snapshots || [];
-      const preview = snapshotPreview ? `<section class="snapshot-preview"><span>恢复前预览</span><h3>${escapeHTML(new Date(snapshotPreview.createdAt).toLocaleString('zh-CN'))}</h3><div><p><strong>${snapshotPreview.seen}</strong>已学单词</p><p><strong>${snapshotPreview.remembered}</strong>真正记住</p><p><strong>${snapshotPreview.studyDays}</strong>学习天数</p><p><strong>${snapshotPreview.attempts}</strong>练习次数</p></div><small>${snapshotPreview.decks} 本词本 · 共 ${snapshotPreview.words} 个词 · 版本 ${snapshotPreview.revision}</small>${snapshotPreview.current?'<em>这就是当前云端进度</em>':`<button class="btn" data-sync-action="admin-restore-snapshot" data-id="${snapshotPreview.id}">确认恢复这一份</button>`}</section>`:'';
+      const preview = snapshotPreview ? `<section class="snapshot-preview"><span>恢复前预览</span><h3>${escapeHTML(new Date(snapshotPreview.createdAt).toLocaleString('zh-CN'))}</h3><div><p><strong>${snapshotPreview.seen}</strong>已学单词</p><p><strong>${snapshotPreview.remembered}</strong>真正记住</p><p><strong>${snapshotPreview.streak}</strong>连续天数</p><p><strong>${snapshotPreview.attempts}</strong>练习次数</p></div><p class="snapshot-changes">${escapeHTML(changeText(snapshotPreview.changes))}</p><small>${snapshotPreview.decks} 本词本 · 共 ${snapshotPreview.words} 个词 · 累计学习 ${snapshotPreview.studyDays} 天 · 版本 ${snapshotPreview.revision}</small>${snapshotPreview.current?'<em>这就是当前云端进度</em>':`<button class="btn" data-sync-action="admin-restore-snapshot" data-id="${snapshotPreview.id}">确认恢复这一份</button>`}</section>`:'';
       return `<div class="sync-dialog sync-history" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">进度保险箱</div><span class="tag">云端进度保护</span><h2 id="sync-title">最近 7 次自动快照</h2><p>先查看内容，再决定是否恢复。恢复学习进度不会重置同步密码。当前云端版本是 ${adminSnapshots.currentRevision || 0}。</p>${snapshots.length?`<div class="snapshot-list">${snapshots.map((item,index)=>`<article class="${snapshotPreview?.id===item.id?'selected':''}"><div><strong>${item.current?'当前进度':`历史记录 ${index+1}`}</strong><span>${escapeHTML(new Date(item.createdAt).toLocaleString('zh-CN'))} · 版本 ${item.revision}</span></div><button class="btn secondary compact" data-sync-action="admin-preview-snapshot" data-id="${item.id}">${snapshotPreview?.id===item.id?'已预览':'查看内容'}</button></article>`).join('')}</div>${preview}`:'<div class="sync-warning">还没有快照。第一次成功同步后会自动开始保留。</div>'}<small>每次成功上传都会生成一份，超过 7 次后自动删除最旧的一份。</small></div>`;
     }
     if (adminMode === 'reset') {

@@ -9,6 +9,7 @@ function signedToken(secret, role, generation = 1) {
   return `${payload}.${crypto.createHmac('sha256', secret).update(payload).digest('base64url')}`;
 }
 const bytes = value => value instanceof ArrayBuffer ? Array.from(new Uint8Array(value)) : ArrayBuffer.isView(value) ? Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) : Array.from(value || []);
+const payloadFor = revision => Buffer.from(JSON.stringify({app:'wordsequence-public',version:1,state:{decks:[{words:[{id:'a'},{id:'b'},{id:'c'}],progress:Object.fromEntries(['a','b','c'].slice(0,Math.min(3,revision)).map((id,index)=>[id,{seen:true,attempts:revision+index,longTermSuccesses:index?0:1}]))}],studyDays:['2026-11-01','2026-11-02','2026-11-03'].slice(0,Math.min(3,revision))}}));
 
 function memoryDB() {
   const data = {state: null, snapshots: [], nextId: 1};
@@ -57,7 +58,7 @@ function memoryDB() {
   const env = {SESSION_SECRET:secret, ALLOWED_ORIGIN:'https://example.test', DB:db};
   const user = signedToken(secret, 'user'), admin = signedToken(secret, 'admin');
   for (let revision = 0; revision < 8; revision++) {
-    const response = await worker.fetch(new Request('https://sync.test/state', {method:'PUT', headers:{Authorization:`Bearer ${user}`, Origin:'https://example.test', 'X-Base-Revision':String(revision), 'X-Device-Id':'test-device', 'X-Payload-Encoding':'json'}, body:Uint8Array.from([revision+1])}), env);
+    const response = await worker.fetch(new Request('https://sync.test/state', {method:'PUT', headers:{Authorization:`Bearer ${user}`, Origin:'https://example.test', 'X-Base-Revision':String(revision), 'X-Device-Id':'test-device', 'X-Payload-Encoding':'json'}, body:payloadFor(revision+1)}), env);
     assert.equal(response.status, 200, await response.text());
   }
   assert.equal(db.data.snapshots.length, 7);
@@ -66,10 +67,17 @@ function memoryDB() {
   const history = await list.json();
   assert.equal(history.snapshots.length, 7);
   const old = history.snapshots.at(-1);
+  const previewResponse = await worker.fetch(new Request(`https://sync.test/admin/snapshots/${old.id}/preview`, {headers:{Authorization:`Bearer ${admin}`, Origin:'https://example.test'}}), env);
+  assert.equal(previewResponse.status, 200, await previewResponse.clone().text());
+  const preview = await previewResponse.json();
+  assert.equal(preview.revision, 2);
+  assert.equal(preview.seen, 2);
+  assert.equal(preview.streak, 2);
+  assert.ok(preview.changes.attempts < 0);
   const restore = await worker.fetch(new Request('https://sync.test/admin/snapshots/restore', {method:'POST', headers:{Authorization:`Bearer ${admin}`, Origin:'https://example.test', 'Content-Type':'application/json'}, body:JSON.stringify({id:old.id})}), env);
   assert.equal(restore.status, 200, await restore.text());
   assert.equal(db.data.state.revision, 9);
-  assert.deepEqual(db.data.state.payload, [2]);
+  assert.deepEqual(db.data.state.payload, bytes(payloadFor(2)));
   assert.equal(db.data.snapshots.length, 7);
-  console.log('Worker keeps 7 snapshots and restores an older revision OK');
+  console.log('Worker keeps, previews, compares, and restores 7 snapshots OK');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -2,11 +2,12 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "lynn-words-sync",
   "main": "src/worker.js",
-  "compatibility_date": "2026-11-03",
+  "compatibility_date": "2026-11-04",
   "workers_dev": true,
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1
+    "logs": {"enabled": true, "head_sampling_rate": 1},
+    "traces": {"enabled": true, "head_sampling_rate": 0.05}
   },
   "vars": {
     "ALLOWED_ORIGIN": "https://dreamdavidmit-glitch.github.io"
