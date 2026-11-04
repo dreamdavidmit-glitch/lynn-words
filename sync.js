@@ -10,7 +10,7 @@
   const CLAIM_PREFIX = '#sync-setup=';
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
-  let model, getState, applyState, notify, timer = 0, claimOpenTimer = 0, ready = false, busy = false, pendingRemote = null, adminMode = '', adminSnapshots = null;
+  let model, getState, applyState, notify, timer = 0, claimOpenTimer = 0, ready = false, busy = false, pendingRemote = null, adminMode = '', adminSnapshots = null, snapshotPreview = null;
   let status = {kind: 'disconnected', text: '仅保存在本机'};
 
   const storage = {
@@ -130,6 +130,15 @@
     return score;
   }
 
+  function stateSummary(state) {
+    let words = 0, seen = 0, attempts = 0, remembered = 0;
+    for (const deck of state?.decks || []) {
+      words += deck.words?.length || 0;
+      for (const progress of Object.values(deck.progress || {})) { if (progress.seen) seen++; attempts += progress.attempts || 0; if (progress.longTermSuccesses > 0) remembered++; }
+    }
+    return {decks: state?.decks?.length || 0, words, seen, attempts, remembered, studyDays: state?.studyDays?.length || 0};
+  }
+
   async function push(state, baseRevision, force = false) {
     if (!token() || busy || (!ready && !force)) return false;
     busy = true; clearTimeout(timer); timer = 0; setStatus('syncing', '正在同步…');
@@ -205,7 +214,13 @@
   async function loadAdminSnapshots() {
     const response = await api('/admin/snapshots', {auth: false, tokenOverride: adminToken()});
     if (!response.ok) throw new Error(await errorMessage(response));
-    adminSnapshots = await response.json(); return adminSnapshots;
+    adminSnapshots = await response.json(); snapshotPreview = null; return adminSnapshots;
+  }
+
+  async function previewAdminSnapshot(id) {
+    const response = await api(`/admin/snapshots/${id}/preview`, {auth: false, tokenOverride: adminToken()});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    snapshotPreview = await response.json(); return snapshotPreview;
   }
 
   async function restoreAdminSnapshot(id) {
@@ -225,12 +240,13 @@
 
   function modalHTML() {
     const claimToken = claimTokenFromURL();
-    if (pendingRemote) return `<div class="sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">☁️</div><h2 id="sync-title">发现两份学习进度</h2><p>云端最后更新于 ${escapeHTML(new Date(pendingRemote.updatedAt).toLocaleString('zh-CN'))}。请选择要继续使用哪一份，另一份会被替换。</p><div class="sync-choice"><button class="btn" data-sync-action="use-cloud">使用云端进度</button><button class="btn secondary" data-sync-action="use-device">保留这台设备</button></div><small>不确定时先关闭，当前本机记录不会丢。</small></div>`;
+    if (pendingRemote) { const localSummary = stateSummary(getState()), cloudSummary = stateSummary(pendingRemote.state); return `<div class="sync-dialog sync-conflict" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">两台设备</div><h2 id="sync-title">发现两份学习进度</h2><p>云端最后更新于 ${escapeHTML(new Date(pendingRemote.updatedAt).toLocaleString('zh-CN'))}。先比较，再决定怎么继续。</p><div class="conflict-compare"><article><span>这台设备</span><strong>${localSummary.seen} 个已学</strong><small>${localSummary.attempts} 次练习</small></article><article><span>云端记录</span><strong>${cloudSummary.seen} 个已学</strong><small>${cloudSummary.attempts} 次练习</small></article></div><div class="sync-choice sync-choice-stack"><button class="btn" data-sync-action="merge">自动合并两份记录</button><button class="btn secondary" data-sync-action="use-cloud">只使用云端进度</button><button class="btn secondary" data-sync-action="use-device">只保留这台设备</button></div><small>自动合并会保留两边不同单词的进度；同一个词同时变化时，采用最近练习较多的一份。</small></div>`; }
     if (adminMode === 'history') {
       if (!adminToken()) return `<form class="sync-dialog" data-sync-form="admin-auth" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button type="button" class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">🛟</div><span class="tag">管理员权限</span><h2 id="sync-title">打开云端进度保险箱</h2><p>验证后可以查看最近 7 次自动快照，并把 Lynn 的进度恢复到其中任意一次。</p><label class="field">管理员密码<input name="password" type="password" maxlength="128" autocomplete="current-password" required></label><button class="btn" type="submit">验证并查看历史</button><small>连续输错 5 次会暂时锁定 15 分钟。</small></form>`;
       if (!adminSnapshots) return `<div class="sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">🛟</div><h2 id="sync-title">正在读取进度快照…</h2><p>小紫怪正在检查最近 7 次云端记录。</p></div>`;
       const snapshots = adminSnapshots.snapshots || [];
-      return `<div class="sync-dialog sync-history" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">🛟</div><span class="tag">云端进度保护</span><h2 id="sync-title">最近 7 次自动快照</h2><p>恢复只会替换学习进度，不会重置 Lynn 的同步密码。当前云端版本是 ${adminSnapshots.currentRevision || 0}。</p>${snapshots.length?`<div class="snapshot-list">${snapshots.map((item,index)=>`<article><div><strong>${item.current?'当前进度':`历史记录 ${index+1}`}</strong><span>${escapeHTML(new Date(item.createdAt).toLocaleString('zh-CN'))} · 版本 ${item.revision}</span></div>${item.current?'<em>正在使用</em>':`<button class="btn secondary compact" data-sync-action="admin-restore-snapshot" data-id="${item.id}">恢复这一份</button>`}</article>`).join('')}</div>`:'<div class="sync-warning">还没有快照。第一次成功同步后会自动开始保留。</div>'}<small>每次成功上传都会生成一份，超过 7 次后自动删除最旧的一份。</small></div>`;
+      const preview = snapshotPreview ? `<section class="snapshot-preview"><span>恢复前预览</span><h3>${escapeHTML(new Date(snapshotPreview.createdAt).toLocaleString('zh-CN'))}</h3><div><p><strong>${snapshotPreview.seen}</strong>已学单词</p><p><strong>${snapshotPreview.remembered}</strong>真正记住</p><p><strong>${snapshotPreview.studyDays}</strong>学习天数</p><p><strong>${snapshotPreview.attempts}</strong>练习次数</p></div><small>${snapshotPreview.decks} 本词本 · 共 ${snapshotPreview.words} 个词 · 版本 ${snapshotPreview.revision}</small>${snapshotPreview.current?'<em>这就是当前云端进度</em>':`<button class="btn" data-sync-action="admin-restore-snapshot" data-id="${snapshotPreview.id}">确认恢复这一份</button>`}</section>`:'';
+      return `<div class="sync-dialog sync-history" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">进度保险箱</div><span class="tag">云端进度保护</span><h2 id="sync-title">最近 7 次自动快照</h2><p>先查看内容，再决定是否恢复。恢复学习进度不会重置同步密码。当前云端版本是 ${adminSnapshots.currentRevision || 0}。</p>${snapshots.length?`<div class="snapshot-list">${snapshots.map((item,index)=>`<article class="${snapshotPreview?.id===item.id?'selected':''}"><div><strong>${item.current?'当前进度':`历史记录 ${index+1}`}</strong><span>${escapeHTML(new Date(item.createdAt).toLocaleString('zh-CN'))} · 版本 ${item.revision}</span></div><button class="btn secondary compact" data-sync-action="admin-preview-snapshot" data-id="${item.id}">${snapshotPreview?.id===item.id?'已预览':'查看内容'}</button></article>`).join('')}</div>${preview}`:'<div class="sync-warning">还没有快照。第一次成功同步后会自动开始保留。</div>'}<small>每次成功上传都会生成一份，超过 7 次后自动删除最旧的一份。</small></div>`;
     }
     if (adminMode === 'reset') {
       if (!adminToken()) return `<form class="sync-dialog" data-sync-form="admin-auth" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button type="button" class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">🔐</div><span class="tag">管理员权限</span><h2 id="sync-title">验证后重置密码</h2><p>这里只重置 Lynn 的同步密码；已经上传的学习进度会继续保留。</p><label class="field">管理员密码<input name="password" type="password" maxlength="128" autocomplete="current-password" required></label><button class="btn" type="submit">验证管理员身份</button><small>连续输错 5 次会暂时锁定 15 分钟。</small></form>`;
@@ -290,12 +306,17 @@
       const openButton = event.target.closest('[data-sync-open]'); if (openButton) { open(); return; }
       const button = event.target.closest('[data-sync-action]'); if (!button) return;
       const action = button.dataset.syncAction;
-      if (action === 'close') { adminMode = ''; adminSnapshots = null; session.remove(ADMIN_TOKEN_KEY); close(); }
+      if (action === 'close') { adminMode = ''; adminSnapshots = null; snapshotPreview = null; session.remove(ADMIN_TOKEN_KEY); close(); }
       else if (action === 'disconnect') { storage.remove(TOKEN_KEY); storage.remove(META_KEY); session.remove(ADMIN_TOKEN_KEY); session.remove(SETUP_TOKEN_KEY); ready = false; pendingRemote = null; close(); setStatus('disconnected', '仅保存在本机'); notify('这台设备已断开云端，本地进度还在。'); }
       else if (action === 'admin-reset-open') { adminMode = 'reset'; session.remove(ADMIN_TOKEN_KEY); open(); }
-      else if (action === 'admin-history-open') { adminMode = 'history'; adminSnapshots = null; session.remove(ADMIN_TOKEN_KEY); open(); }
+      else if (action === 'admin-history-open') { adminMode = 'history'; adminSnapshots = null; snapshotPreview = null; session.remove(ADMIN_TOKEN_KEY); open(); }
+      else if (action === 'admin-preview-snapshot') {
+        const id = Number(button.dataset.id); button.disabled = true; button.textContent = '正在读取…';
+        previewAdminSnapshot(id).then(open).catch(error => { notify(error.message); button.disabled = false; button.textContent = '查看内容'; });
+      }
       else if (action === 'admin-restore-snapshot') {
         const id = Number(button.dataset.id);
+        if (!snapshotPreview || snapshotPreview.id !== id) { notify('请先预览这份记录。'); return; }
         if (!confirm('确定把云端学习进度恢复到这一份吗？当前进度也已经在最近快照里，可以再次恢复。')) return;
         button.disabled = true; button.textContent = '正在恢复…';
         restoreAdminSnapshot(id).then(() => { close(); adminMode = ''; session.remove(ADMIN_TOKEN_KEY); notify('云端进度已经恢复，当前设备也已更新 ✓'); }).catch(error => { notify(error.message); adminSnapshots = null; loadAdminSnapshots().then(open).catch(() => { session.remove(ADMIN_TOKEN_KEY); open(); }); });
@@ -308,6 +329,7 @@
       else if (action === 'restore') { readRemote().then(async remote => { if (!remote) throw new Error('云端还没有进度。'); await applyState(remote.state); saveRemoteMeta(remote, await digest(remote.text)); close(); notify('已经恢复到云端进度 ✓'); }).catch(error => notify(error.message)); }
       else if (action === 'use-cloud') { const remote = pendingRemote; pendingRemote = null; applyState(remote.state).then(async () => { saveRemoteMeta(remote, await digest(remote.text)); close(); notify('已经使用云端进度 ✓'); }); }
       else if (action === 'use-device') { const revision = pendingRemote.revision; pendingRemote = null; push(getState(), revision, true).then(ok => { if (ok) { close(); notify('这台设备的进度已上传 ✓'); } }); }
+      else if (action === 'merge') { const remote = pendingRemote, merged = model.mergeStates(getState(), remote.state); pendingRemote = null; button.disabled = true; button.textContent = '正在合并…'; applyState(merged).then(() => push(merged, remote.revision, true)).then(ok => { if (ok) { close(); notify('两台设备的学习记录已经合并 ✓'); } }).catch(error => notify(error.message)); }
     });
     root.document.addEventListener('submit', event => {
       const form = event.target.closest('[data-sync-form]'); if (!form) return; event.preventDefault();

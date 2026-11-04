@@ -5,7 +5,8 @@
   const DB_NAME = 'wordsequence-public-v1';
   const STORE_NAME = 'records';
   const LONG_TERM_GAP_MS = 8 * 60 * 60 * 1000;
-  const DEFAULT_SETTINGS = Object.freeze({dailyTarget: 30, batchSize: 10, delayMinutes: 20, rate: 1, accent: 'en-US', voiceURI: '', autoPlay: true});
+  const DEFAULT_SETTINGS = Object.freeze({dailyTarget: 30, batchSize: 10, delayMinutes: 20, rate: 1, accent: 'en-US', voiceURI: '', autoPlay: true, autoAdvance: true});
+  const SLOW_RESPONSE_MS = 8000;
   const MAX_WORDS = 50000, MAX_DECK_WORDS = 20000, MAX_DECKS = 100;
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const isRecord = value => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -23,7 +24,8 @@
   function dailyEntry(state, now = Date.now()) {
     checkStamp(now); const key = day(now);
     if (!isRecord(state.dailyLog)) state.dailyLog = {};
-    if (!isRecord(state.dailyLog[key])) state.dailyLog[key] = {activeMs: 0, attempts: 0, correct: 0, wrong: 0};
+    if (!isRecord(state.dailyLog[key])) state.dailyLog[key] = {activeMs: 0, attempts: 0, correct: 0, wrong: 0, rescueDone: []};
+    if (!Array.isArray(state.dailyLog[key].rescueDone)) state.dailyLog[key].rescueDone = [];
     const keys = Object.keys(state.dailyLog).filter(validDay).sort();
     if (keys.length > 400) for (const old of keys.slice(0, keys.length - 400)) delete state.dailyLog[old];
     return state.dailyLog[key];
@@ -52,6 +54,7 @@
     if (own(raw, 'accent')) { if (!['en-US', 'en-GB'].includes(raw.accent)) throw new Error('读音口音设置不正确。'); out.accent = raw.accent; }
     if (own(raw, 'voiceURI')) out.voiceURI = cleanText(raw.voiceURI, 1000, '朗读声音');
     if (own(raw, 'autoPlay')) { if (typeof raw.autoPlay !== 'boolean') throw new Error('自动朗读设置不正确。'); out.autoPlay = raw.autoPlay; }
+    if (own(raw, 'autoAdvance')) { if (typeof raw.autoAdvance !== 'boolean') throw new Error('自动下一题设置不正确。'); out.autoAdvance = raw.autoAdvance; }
     return out;
   }
   function settingsDelay(settings) { return validatedSettings(settings || DEFAULT_SETTINGS).delayMinutes * 60000; }
@@ -92,7 +95,7 @@
     deck.words = words; deck.progress = progress; deck.session = null; deck.updatedAt = now;
     return deck;
   }
-  function freshProgress() { return {seen: false, firstSeenAt: null, firstSeenDate: null, lastSeenAt: null, attempts: 0, correct: 0, wrong: 0, due: null, repetitions: 0, intervalDays: 0, ease: 2.5, lapses: 0, lastLapseDate: null, lastScheduled: null, lastReviewed: null, delayedDueAt: null, shortDelayMs: 20 * 60000, checkedAt: null, longTermSuccesses: 0, lastLongTermSuccessDate: null}; }
+  function freshProgress() { return {seen: false, firstSeenAt: null, firstSeenDate: null, lastSeenAt: null, attempts: 0, correct: 0, wrong: 0, due: null, repetitions: 0, intervalDays: 0, ease: 2.5, lapses: 0, lastLapseDate: null, lastScheduled: null, lastReviewed: null, delayedDueAt: null, shortDelayMs: 20 * 60000, checkedAt: null, longTermSuccesses: 0, lastLongTermSuccessDate: null, errorStreak: 0, slowStreak: 0, lastResponseMs: null, confusions: {}}; }
   function wordState(deck, id) {
     if (!safeId(id) || !deck.words.some(w => w.id === id)) throw new Error('这个词已不在当前词表中。');
     if (!own(deck.progress, id)) deck.progress[id] = freshProgress();
@@ -104,13 +107,19 @@
     if (w.delayedDueAt !== null) { w.shortDelayMs = settingsDelay(settings); w.delayedDueAt = now + w.shortDelayMs; }
     return reviewInfo(deck, id, now);
   }
-  function answer(deck, id, right, settings = DEFAULT_SETTINGS, now = Date.now()) {
+  function answer(deck, id, right, settings = DEFAULT_SETTINGS, now = Date.now(), meta = {}) {
     checkStamp(now); if (typeof right !== 'boolean') throw new Error('答题结果必须是对或错。');
     const delay = settingsDelay(settings), today = day(now), w = wordState(deck, id);
     const previousScheduled = w.lastScheduled, previouslyDue = validDay(w.due) && w.due <= today;
     const gap = w.lastSeenAt === null ? null : now - w.lastSeenAt;
     const shortReady = w.delayedDueAt !== null && now >= w.delayedDueAt && gap !== null && gap >= w.shortDelayMs;
     markSeen(w, now); w.attempts++; w.correct += right ? 1 : 0; w.wrong += right ? 0 : 1;
+    const responseMs = Number.isFinite(meta.responseMs) ? Math.max(0, Math.min(10 * 60 * 1000, Math.round(meta.responseMs))) : null;
+    if (responseMs !== null) { w.lastResponseMs = responseMs; w.slowStreak = responseMs >= SLOW_RESPONSE_MS ? Math.min(1000, w.slowStreak + 1) : Math.max(0, w.slowStreak - (right ? 1 : 0)); }
+    w.errorStreak = right ? 0 : Math.min(1000, w.errorStreak + 1);
+    if (!isRecord(w.confusions)) w.confusions = {};
+    if (!right && safeId(meta.confusedWith) && meta.confusedWith !== id && deck.words.some(item => item.id === meta.confusedWith)) w.confusions[meta.confusedWith] = Math.min(1000, (w.confusions[meta.confusedWith] || 0) + 1);
+    if (right) for (const other of Object.keys(w.confusions)) { w.confusions[other] = Math.max(0, w.confusions[other] - 1); if (!w.confusions[other]) delete w.confusions[other]; }
     if (!right) {
       if (w.lastLapseDate !== today) { w.ease = Math.max(1.3, Math.round((w.ease - 0.54) * 100) / 100); w.lapses++; w.lastLapseDate = today; }
       w.repetitions = 0; w.intervalDays = 0; w.due = today; w.lastScheduled = null;
@@ -149,6 +158,30 @@
     return {total: deck.words.length, seen, unseen: deck.words.length - seen, newToday, remainingToday: Math.max(0, config.dailyTarget - newToday), due: dueWords(deck, now).length, delayedPending: pending.length, nextDelayedAt: pending.length ? Math.min(...pending) : null, longTerm: progress.filter(w => w.longTermSuccesses > 0).length, missingMeanings: deck.words.filter(w => !w.meaning.trim()).length, mistakes: progress.filter(w => w.wrong > 0).length};
   }
   function nextNewWords(deck, settings = DEFAULT_SETTINGS, now = Date.now()) { const remaining = stats(deck, settings, now).remainingToday; return deck.words.filter(w => !deck.progress[w.id]?.seen && w.meaning.trim()).slice(0, remaining); }
+  function rescueWords(state, deck, now = Date.now(), limit = 10) {
+    if (!deck) return [];
+    const done = new Set(state.dailyLog?.[day(now)]?.rescueDone || []), critical = [], fallback = [];
+    for (const word of deck.words) {
+      const progress = deck.progress[word.id]; if (!progress?.seen || !word.meaning.trim() || done.has(word.id)) continue;
+      const confusion = Math.max(0, ...Object.values(progress.confusions || {}).filter(Number.isFinite));
+      const reasons = [];
+      if ((progress.errorStreak || 0) >= 2) reasons.push('连续答错');
+      if ((progress.slowStreak || 0) >= 2) reasons.push('反应偏慢');
+      if (confusion >= 2) reasons.push('容易混淆');
+      const score = reasons.length * 100 + (progress.errorStreak || 0) * 12 + (progress.slowStreak || 0) * 8 + confusion * 10 + progress.lapses * 3 + progress.wrong;
+      const item = {word, progress, reasons: reasons.length ? reasons : ['最近答错'], score};
+      if (reasons.length) critical.push(item); else if (progress.wrong > 0) fallback.push(item);
+    }
+    critical.sort((a, b) => b.score - a.score); fallback.sort((a, b) => b.score - a.score);
+    const picked = critical.slice(0, limit);
+    if (picked.length < Math.min(5, limit)) picked.push(...fallback.slice(0, Math.min(5, limit) - picked.length));
+    return picked.slice(0, limit);
+  }
+  function markRescueDone(state, ids, now = Date.now()) {
+    const entry = dailyEntry(state, now), known = new Set(entry.rescueDone || []);
+    for (const id of ids || []) if (safeId(id)) known.add(id);
+    entry.rescueDone = [...known].slice(-100); return entry.rescueDone;
+  }
   function recommendDailyPlans(state, deck, settings = DEFAULT_SETTINGS, now = Date.now()) {
     const today = day(now), config = validatedSettings(settings), recent = [];
     for (let offset = 1; offset <= 7; offset++) { const entry = state.dailyLog?.[addDays(today, -offset)]; if (isRecord(entry)) recent.push(entry); }
@@ -208,6 +241,44 @@
     else if (studyDays > 0) summary = '哪怕只学了几天，这些认真花过的时间都算数；下周继续轻轻往前走。';
     return {start, end, days, studyDays, newWords, remembered, minutes, attempts, accuracy: attempts ? correct / attempts : null, hardest, summary};
   }
+  function activityCalendar(state, now = Date.now()) {
+    const current = new Date(now), year = current.getFullYear(), month = current.getMonth();
+    const first = new Date(year, month, 1, 12), last = new Date(year, month + 1, 0, 12), start = addDays(day(first), -first.getDay()), end = addDays(day(last), 6 - last.getDay());
+    const allProgress = [];
+    for (const deck of state.decks || []) for (const progress of Object.values(deck.progress || {})) allProgress.push(progress);
+    const cells = [];
+    for (let date = start; date <= end; date = addDays(date, 1)) {
+      const entry = state.dailyLog?.[date] || {}, attempts = entry.attempts || 0, correct = entry.correct || 0;
+      cells.push({date, inMonth: +date.slice(5, 7) === month + 1, today: date === day(now), minutes: Math.round((entry.activeMs || 0) / 60000), attempts, accuracy: attempts ? correct / attempts : null, newWords: allProgress.filter(p => p.firstSeenDate === date).length, remembered: allProgress.filter(p => p.lastLongTermSuccessDate === date).length});
+    }
+    return {year, month: month + 1, label: `${year} 年 ${month + 1} 月`, cells};
+  }
+  function mergeStates(localState, remoteState) {
+    const local = validate(localState), remote = validate(remoteState), out = local;
+    const deckById = new Map(out.decks.map(deck => [deck.id, deck]));
+    const progressTime = progress => Math.max(progress?.lastSeenAt || 0, progress?.firstSeenAt || 0);
+    for (const remoteDeck of remote.decks) {
+      const target = deckById.get(remoteDeck.id);
+      if (!target) { out.decks.push(remoteDeck); deckById.set(remoteDeck.id, remoteDeck); continue; }
+      const wordIds = new Set(target.words.map(word => word.id));
+      for (const remoteWord of remoteDeck.words) if (!wordIds.has(remoteWord.id)) { target.words.push(remoteWord); wordIds.add(remoteWord.id); }
+      for (const [id, remoteProgress] of Object.entries(remoteDeck.progress)) {
+        const localProgress = target.progress[id];
+        if (!localProgress || progressTime(remoteProgress) > progressTime(localProgress) || (progressTime(remoteProgress) === progressTime(localProgress) && remoteProgress.attempts > localProgress.attempts)) target.progress[id] = remoteProgress;
+      }
+      if (remoteDeck.updatedAt > target.updatedAt) { target.title = remoteDeck.title; target.updatedAt = remoteDeck.updatedAt; target.sourceName = remoteDeck.sourceName; target.sourceType = remoteDeck.sourceType; }
+      target.session = null;
+    }
+    out.studyDays = [...new Set([...(out.studyDays || []), ...(remote.studyDays || [])])].sort();
+    for (const [date, remoteEntry] of Object.entries(remote.dailyLog || {})) {
+      const localEntry = out.dailyLog[date] || {activeMs: 0, attempts: 0, correct: 0, wrong: 0, rescueDone: []};
+      const localAttempts = localEntry.attempts || 0, remoteAttempts = remoteEntry.attempts || 0, preferred = remoteAttempts > localAttempts ? remoteEntry : localEntry;
+      out.dailyLog[date] = {activeMs: Math.max(localEntry.activeMs || 0, remoteEntry.activeMs || 0), attempts: preferred.attempts || 0, correct: preferred.correct || 0, wrong: preferred.wrong || 0, rescueDone: [...new Set([...(localEntry.rescueDone || []), ...(remoteEntry.rescueDone || [])])].slice(-100)};
+    }
+    if (!out.activeDeckId || !out.decks.some(deck => deck.id === out.activeDeckId)) out.activeDeckId = remote.activeDeckId;
+    if (!out.dailyPlan && remote.dailyPlan) out.dailyPlan = remote.dailyPlan;
+    return validate(out);
+  }
   function shuffle(items, random = Math.random) { const copy = [...items]; for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
   function meaningTokens(s) { return s.replace(/\([^)]*\)|（[^）]*）/g, '').replace(/\b(?:n|v|vt|vi|adj|adv|prep|conj)\./g, '').split(/[；;，,、\n]/).map(t => t.trim().replace(/的$/, '')).filter(t => t.length >= 2); }
   function overlap(a, b) { return meaningTokens(a).some(x => meaningTokens(b).some(y => x === y || x.includes(y) || y.includes(x))); }
@@ -220,12 +291,18 @@
   function validateProgress(raw) {
     if (!isRecord(raw)) throw new Error('词汇进度损坏。'); const w = freshProgress();
     if (own(raw, 'seen')) { if (typeof raw.seen !== 'boolean') throw new Error('学习状态格式不正确。'); w.seen = raw.seen; }
-    for (const key of ['attempts', 'correct', 'wrong', 'repetitions', 'intervalDays', 'lapses', 'longTermSuccesses']) if (own(raw, key)) w[key] = integer(raw[key], 0, key === 'intervalDays' ? 36500 : 1000000000, '词汇进度');
+    for (const key of ['attempts', 'correct', 'wrong', 'repetitions', 'intervalDays', 'lapses', 'longTermSuccesses', 'errorStreak', 'slowStreak']) if (own(raw, key)) w[key] = integer(raw[key], 0, key === 'intervalDays' ? 36500 : 1000000000, '词汇进度');
     if (w.correct + w.wrong !== w.attempts) throw new Error('答题次数与正确、错误次数不一致。');
     for (const key of ['firstSeenAt', 'lastSeenAt', 'delayedDueAt', 'checkedAt']) if (raw[key] != null) { if (!validStamp(raw[key])) throw new Error('学习时间记录无效。'); w[key] = raw[key]; }
     for (const key of ['firstSeenDate', 'due', 'lastScheduled', 'lastReviewed', 'lastLapseDate', 'lastLongTermSuccessDate']) if (raw[key] != null) { if (!validDay(raw[key])) throw new Error('复习日期记录无效。'); w[key] = raw[key]; }
     if (own(raw, 'ease')) { if (!Number.isFinite(raw.ease) || raw.ease < 1.3 || raw.ease > 3) throw new Error('复习难度记录无效。'); w.ease = raw.ease; }
     if (own(raw, 'shortDelayMs')) w.shortDelayMs = integer(raw.shortDelayMs, 5 * 60000, 120 * 60000, '延迟复习间隔');
+    if (raw.lastResponseMs != null) w.lastResponseMs = integer(raw.lastResponseMs, 0, 10 * 60 * 1000, '答题反应时间');
+    if (raw.confusions != null) {
+      if (!isRecord(raw.confusions) || Object.keys(raw.confusions).length > 100) throw new Error('易混淆记录格式不正确。');
+      w.confusions = {};
+      for (const [id, count] of Object.entries(raw.confusions)) { if (!safeId(id)) throw new Error('易混淆词编号无效。'); w.confusions[id] = integer(count, 1, 1000, '易混淆次数'); }
+    }
     if (w.seen && (w.firstSeenAt === null || !w.firstSeenDate)) throw new Error('缺少首次学习时间。');
     if (!w.seen && (w.firstSeenAt !== null || w.firstSeenDate !== null || w.attempts > 0)) throw new Error('首次学习状态不一致。');
     return w;
@@ -270,6 +347,7 @@
         const item = {};
         for (const [key, max] of [['activeMs', 86400000], ['attempts', 1000000], ['correct', 1000000], ['wrong', 1000000]]) item[key] = integer(entry[key] ?? 0, 0, max, '每日学习记录');
         if (item.correct + item.wrong !== item.attempts) throw new Error('每日答题次数记录不一致。');
+        if (entry.rescueDone != null) { if (!Array.isArray(entry.rescueDone) || entry.rescueDone.length > 100 || entry.rescueDone.some(id => !safeId(id))) throw new Error('错词急救记录格式不正确。'); item.rescueDone = [...new Set(entry.rescueDone)]; } else item.rescueDone = [];
         state.dailyLog[date] = item;
       }
     }
@@ -318,7 +396,7 @@
     });
     saveQueue = operation; return operation;
   }
-  const api = {VERSION, APP_ID, DB_NAME, DEFAULT_SETTINGS, LONG_TERM_GAP_MS, day, addDays, markStudyDay, streak, recordStudyTime, recordDailyAnswer, recommendDailyPlans, dailyPlan, setDailyPlan, weeklyReport, validDay, daysBetween, fresh, createDeck, updateDeckWords, wordState, see, answer, reviewInfo, dueWords, nextNewWords, stats, shuffle, overlap, chooseOptions, validate, validatedSettings, exportBackup, importBackup, load, save};
+  const api = {VERSION, APP_ID, DB_NAME, DEFAULT_SETTINGS, LONG_TERM_GAP_MS, SLOW_RESPONSE_MS, day, addDays, markStudyDay, streak, recordStudyTime, recordDailyAnswer, recommendDailyPlans, dailyPlan, setDailyPlan, weeklyReport, activityCalendar, rescueWords, markRescueDone, mergeStates, validDay, daysBetween, fresh, createDeck, updateDeckWords, wordState, see, answer, reviewInfo, dueWords, nextNewWords, stats, shuffle, overlap, chooseOptions, validate, validatedSettings, exportBackup, importBackup, load, save};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.PublicModel = api;
 })(typeof window !== 'undefined' ? window : globalThis);

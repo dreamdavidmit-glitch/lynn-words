@@ -79,6 +79,25 @@ function blobValue(value) {
   return Uint8Array.from(value || []).buffer;
 }
 
+async function stateSummaryFromPayload(payload, encoding) {
+  const bytes = blobValue(payload);
+  const text = encoding === 'gzip'
+    ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
+    : decoder.decode(bytes);
+  const parsed = JSON.parse(text), state = parsed?.state;
+  if (!state || !Array.isArray(state.decks)) throw new Error('快照中的学习记录无法读取。');
+  let words = 0, seen = 0, attempts = 0, remembered = 0;
+  for (const deck of state.decks) {
+    words += Array.isArray(deck.words) ? deck.words.length : 0;
+    for (const progress of Object.values(deck.progress || {})) {
+      if (progress?.seen) seen++;
+      attempts += Number(progress?.attempts) || 0;
+      if ((Number(progress?.longTermSuccesses) || 0) > 0) remembered++;
+    }
+  }
+  return {decks: state.decks.length, words, seen, attempts, remembered, studyDays: Array.isArray(state.studyDays) ? state.studyDays.length : 0};
+}
+
 async function bodyJSON(request) {
   if (Number(request.headers.get('Content-Length') || 0) > 4096) throw new Error('请求内容过大。');
   return request.json();
@@ -209,6 +228,18 @@ async function adminSnapshots(request, env) {
   return json(request, env, {currentRevision: Number(current?.revision) || 0, snapshots: (rows.results || []).map(row => ({id: Number(row.id), revision: Number(row.revision), createdAt: row.created_at, deviceId: row.device_id, reason: row.reason, current: Number(row.revision) === Number(current?.revision)}))});
 }
 
+async function adminPreviewSnapshot(request, env, id) {
+  if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
+  if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error: '历史记录编号无效。'}, 400);
+  const [snapshot, current] = await Promise.all([
+    env.DB.prepare('SELECT id, revision, created_at, device_id, encoding, payload FROM progress_snapshots WHERE id = ?').bind(id).first(),
+    env.DB.prepare('SELECT revision FROM sync_state WHERE id = 1').first()
+  ]);
+  if (!snapshot) return json(request, env, {error: '这份历史记录已经不在最近 7 次之内。'}, 404);
+  const summary = await stateSummaryFromPayload(snapshot.payload, snapshot.encoding);
+  return json(request, env, {id: Number(snapshot.id), revision: Number(snapshot.revision), createdAt: snapshot.created_at, deviceId: snapshot.device_id, current: Number(snapshot.revision) === Number(current?.revision), ...summary});
+}
+
 async function adminRestoreSnapshot(request, env) {
   if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
   const body = await bodyJSON(request), id = Number(body.id);
@@ -289,6 +320,8 @@ export default {
       if (url.pathname === '/admin/status' && request.method === 'GET') return await adminStatus(request, env);
       if (url.pathname === '/admin/reset' && request.method === 'POST') return await adminReset(request, env);
       if (url.pathname === '/admin/snapshots' && request.method === 'GET') return await adminSnapshots(request, env);
+      const snapshotPreview = url.pathname.match(/^\/admin\/snapshots\/(\d+)\/preview$/);
+      if (snapshotPreview && request.method === 'GET') return await adminPreviewSnapshot(request, env, Number(snapshotPreview[1]));
       if (url.pathname === '/admin/snapshots/restore' && request.method === 'POST') return await adminRestoreSnapshot(request, env);
       if (url.pathname === '/claim' && request.method === 'POST') return await claim(request, env);
       if (url.pathname === '/session' && request.method === 'POST') return await login(request, env);
