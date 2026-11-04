@@ -17,9 +17,27 @@
   function daysBetween(from, to) { return Math.round((Date.parse(to + 'T12:00:00Z') - Date.parse(from + 'T12:00:00Z')) / 86400000); }
   function checkStamp(now) { if (!validStamp(now)) throw new Error('学习时间无效。'); }
   function uuid(prefix) { return prefix + '-' + (root.crypto?.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)); }
-  function fresh() { return {version: VERSION, decks: [], settings: {...DEFAULT_SETTINGS}, activeDeckId: null, studyDays: []}; }
+  function fresh() { return {version: VERSION, decks: [], settings: {...DEFAULT_SETTINGS}, activeDeckId: null, studyDays: [], dailyLog: {}, dailyPlan: null}; }
   function markStudyDay(state, now = Date.now()) { checkStamp(now); const today = day(now); if (!Array.isArray(state.studyDays)) state.studyDays = []; if (!state.studyDays.includes(today)) { state.studyDays.push(today); state.studyDays.sort(); if (state.studyDays.length > 3660) state.studyDays.splice(0, state.studyDays.length - 3660); } return state.studyDays; }
   function streak(state, now = Date.now()) { const days = new Set(Array.isArray(state.studyDays) ? state.studyDays : []); let cursor = day(now), count = 0; if (!days.has(cursor)) cursor = addDays(cursor, -1); while (days.has(cursor)) { count++; cursor = addDays(cursor, -1); } return {count, today: days.has(day(now)), total: days.size}; }
+  function dailyEntry(state, now = Date.now()) {
+    checkStamp(now); const key = day(now);
+    if (!isRecord(state.dailyLog)) state.dailyLog = {};
+    if (!isRecord(state.dailyLog[key])) state.dailyLog[key] = {activeMs: 0, attempts: 0, correct: 0, wrong: 0};
+    const keys = Object.keys(state.dailyLog).filter(validDay).sort();
+    if (keys.length > 400) for (const old of keys.slice(0, keys.length - 400)) delete state.dailyLog[old];
+    return state.dailyLog[key];
+  }
+  function recordStudyTime(state, elapsedMs, now = Date.now()) {
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) throw new Error('学习时长无效。');
+    const entry = dailyEntry(state, now); entry.activeMs = Math.min(24 * 60 * 60 * 1000, entry.activeMs + Math.min(5 * 60 * 1000, Math.round(elapsedMs)));
+    if (elapsedMs >= 5000) markStudyDay(state, now);
+    return entry;
+  }
+  function recordDailyAnswer(state, right, now = Date.now()) {
+    if (typeof right !== 'boolean') throw new Error('答题结果必须是对或错。');
+    const entry = dailyEntry(state, now); entry.attempts++; entry.correct += right ? 1 : 0; entry.wrong += right ? 0 : 1; markStudyDay(state, now); return entry;
+  }
   function cleanText(value, max, label, empty = true) {
     if (typeof value !== 'string' || value.length > max || (!empty && !value.trim())) throw new Error(label + '格式不正确。');
     return value.trim();
@@ -131,6 +149,65 @@
     return {total: deck.words.length, seen, unseen: deck.words.length - seen, newToday, remainingToday: Math.max(0, config.dailyTarget - newToday), due: dueWords(deck, now).length, delayedPending: pending.length, nextDelayedAt: pending.length ? Math.min(...pending) : null, longTerm: progress.filter(w => w.longTermSuccesses > 0).length, missingMeanings: deck.words.filter(w => !w.meaning.trim()).length, mistakes: progress.filter(w => w.wrong > 0).length};
   }
   function nextNewWords(deck, settings = DEFAULT_SETTINGS, now = Date.now()) { const remaining = stats(deck, settings, now).remainingToday; return deck.words.filter(w => !deck.progress[w.id]?.seen && w.meaning.trim()).slice(0, remaining); }
+  function recommendDailyPlans(state, deck, settings = DEFAULT_SETTINGS, now = Date.now()) {
+    const today = day(now), config = validatedSettings(settings), recent = [];
+    for (let offset = 1; offset <= 7; offset++) { const entry = state.dailyLog?.[addDays(today, -offset)]; if (isRecord(entry)) recent.push(entry); }
+    const attempts = recent.reduce((sum, entry) => sum + (entry.attempts || 0), 0);
+    const correct = recent.reduce((sum, entry) => sum + (entry.correct || 0), 0);
+    const accuracy = attempts ? correct / attempts : null;
+    const activeDays = recent.filter(entry => (entry.activeMs || 0) >= 60000);
+    const averageMinutes = activeDays.length ? activeDays.reduce((sum, entry) => sum + entry.activeMs, 0) / activeDays.length / 60000 : 0;
+    const due = deck ? dueWords(deck, now).length : 0;
+    let normal = Math.min(25, Math.max(10, Math.round(config.dailyTarget / 5) * 5));
+    if (!attempts) normal = 15;
+    else if (accuracy >= .88) normal += 5;
+    else if (accuracy < .68) normal -= 5;
+    if (due >= 20) normal -= 5;
+    if (averageMinutes >= 38) normal -= 5;
+    normal = Math.min(30, Math.max(10, Math.round(normal / 5) * 5));
+    const targets = {light: Math.max(5, normal - 5), normal, sprint: Math.min(40, normal + 10)};
+    let recommended = 'normal', reason = '最近节奏比较稳定，今天按适中的量走就刚刚好。';
+    if (due >= 20) { recommended = 'light'; reason = `今天有 ${due} 个词等复习，先把旧朋友照顾好，新词少一点也算完成。`; }
+    else if (accuracy !== null && accuracy < .68) { recommended = 'light'; reason = '最近正确率有点累，今天少背一点、记牢一点更划算。'; }
+    else if (averageMinutes >= 38) { recommended = 'light'; reason = '最近每天花的时间已经不少，今天给大脑留一点余地。'; }
+    else if (accuracy !== null && accuracy >= .9 && due < 5 && averageMinutes > 0 && averageMinutes < 25) { recommended = 'sprint'; reason = '最近答得又稳又快，今天状态允许的话可以多走一小段。'; }
+    const names = {light: '轻松', normal: '适中', sprint: '冲刺'};
+    const plans = Object.keys(targets).map(mode => ({mode, name: names[mode], target: targets[mode], estimatedMinutes: Math.max(5, Math.round((targets[mode] * 1.1 + Math.min(due, 30) * .3) / 5) * 5)}));
+    return {date: today, recommended, reason, accuracy, attempts, averageMinutes: Math.round(averageMinutes), due, plans};
+  }
+  function dailyPlan(state, deck, settings = DEFAULT_SETTINGS, now = Date.now()) {
+    const recommendation = recommendDailyPlans(state, deck, settings, now);
+    const saved = state.dailyPlan;
+    if (isRecord(saved) && saved.date === recommendation.date && ['light', 'normal', 'sprint'].includes(saved.mode)) {
+      const plan = recommendation.plans.find(item => item.mode === saved.mode);
+      if (plan) return {...recommendation, selected: saved.mode, target: plan.target, estimatedMinutes: plan.estimatedMinutes};
+    }
+    const plan = recommendation.plans.find(item => item.mode === recommendation.recommended) || recommendation.plans[1];
+    return {...recommendation, selected: plan.mode, target: plan.target, estimatedMinutes: plan.estimatedMinutes};
+  }
+  function setDailyPlan(state, mode, deck, settings = DEFAULT_SETTINGS, now = Date.now()) {
+    if (!['light', 'normal', 'sprint'].includes(mode)) throw new Error('请选择轻松、适中或冲刺。');
+    const recommendation = recommendDailyPlans(state, deck, settings, now), plan = recommendation.plans.find(item => item.mode === mode);
+    state.dailyPlan = {date: recommendation.date, mode, target: plan.target}; return dailyPlan(state, deck, settings, now);
+  }
+  function weeklyReport(state, now = Date.now()) {
+    const end = day(now), start = addDays(end, -6), days = [];
+    const allProgress = [];
+    for (const deck of state.decks || []) for (const word of deck.words || []) { const progress = deck.progress?.[word.id]; if (progress) allProgress.push({word, deck, progress}); }
+    for (let offset = 0; offset < 7; offset++) {
+      const date = addDays(start, offset), entry = state.dailyLog?.[date] || {};
+      days.push({date, activeMinutes: Math.round((entry.activeMs || 0) / 60000), attempts: entry.attempts || 0, correct: entry.correct || 0, wrong: entry.wrong || 0, newWords: allProgress.filter(item => item.progress.firstSeenDate === date).length, remembered: allProgress.filter(item => item.progress.lastLongTermSuccessDate === date).length});
+    }
+    const attempts = days.reduce((sum, item) => sum + item.attempts, 0), correct = days.reduce((sum, item) => sum + item.correct, 0);
+    const studyDays = days.filter(item => (state.studyDays || []).includes(item.date)).length;
+    const hardest = allProgress.filter(item => item.progress.wrong > 0).sort((a, b) => b.progress.wrong - a.progress.wrong || (a.progress.correct / Math.max(1, a.progress.attempts)) - (b.progress.correct / Math.max(1, b.progress.attempts))).slice(0, 5).map(item => ({word: item.word.word, meaning: item.word.meaning, wrong: item.progress.wrong, attempts: item.progress.attempts, deck: item.deck.title}));
+    const newWords = days.reduce((sum, item) => sum + item.newWords, 0), remembered = days.reduce((sum, item) => sum + item.remembered, 0), minutes = days.reduce((sum, item) => sum + item.activeMinutes, 0);
+    let summary = '这一周从一个词开始也很好，小紫怪会在这里等你。';
+    if (studyDays >= 6) summary = '这一周你几乎每天都来见它们，稳定本身就是很厉害的能力，今天也可以放心休息。';
+    else if (studyDays >= 3) summary = '不需要每天拼命，能一次次回来，就已经在把陌生慢慢变成熟悉。';
+    else if (studyDays > 0) summary = '哪怕只学了几天，这些认真花过的时间都算数；下周继续轻轻往前走。';
+    return {start, end, days, studyDays, newWords, remembered, minutes, attempts, accuracy: attempts ? correct / attempts : null, hardest, summary};
+  }
   function shuffle(items, random = Math.random) { const copy = [...items]; for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
   function meaningTokens(s) { return s.replace(/\([^)]*\)|（[^）]*）/g, '').replace(/\b(?:n|v|vt|vi|adj|adv|prep|conj)\./g, '').split(/[；;，,、\n]/).map(t => t.trim().replace(/的$/, '')).filter(t => t.length >= 2); }
   function overlap(a, b) { return meaningTokens(a).some(x => meaningTokens(b).some(y => x === y || x.includes(y) || y.includes(x))); }
@@ -185,6 +262,21 @@
     if (raw.activeDeckId != null && !deckIds.has(raw.activeDeckId)) throw new Error('当前词表已经不存在。');
     state.activeDeckId = raw.activeDeckId ?? null;
     if (raw.studyDays != null) { if (!Array.isArray(raw.studyDays) || raw.studyDays.length > 3660 || raw.studyDays.some(d => !validDay(d))) throw new Error('打卡记录格式不正确。'); state.studyDays = [...new Set(raw.studyDays)].sort(); }
+    if (raw.dailyLog != null) {
+      if (!isRecord(raw.dailyLog) || Object.keys(raw.dailyLog).length > 400) throw new Error('每日学习记录格式不正确。');
+      state.dailyLog = {};
+      for (const [date, entry] of Object.entries(raw.dailyLog)) {
+        if (!validDay(date) || !isRecord(entry)) throw new Error('每日学习记录格式不正确。');
+        const item = {};
+        for (const [key, max] of [['activeMs', 86400000], ['attempts', 1000000], ['correct', 1000000], ['wrong', 1000000]]) item[key] = integer(entry[key] ?? 0, 0, max, '每日学习记录');
+        if (item.correct + item.wrong !== item.attempts) throw new Error('每日答题次数记录不一致。');
+        state.dailyLog[date] = item;
+      }
+    }
+    if (raw.dailyPlan != null) {
+      if (!isRecord(raw.dailyPlan) || !validDay(raw.dailyPlan.date) || !['light', 'normal', 'sprint'].includes(raw.dailyPlan.mode)) throw new Error('每日任务选择格式不正确。');
+      state.dailyPlan = {date: raw.dailyPlan.date, mode: raw.dailyPlan.mode, target: integer(raw.dailyPlan.target, 5, 40, '每日任务量')};
+    }
     return state;
   }
   function exportBackup(state) { return JSON.stringify({app: APP_ID, version: VERSION, exportedAt: new Date().toISOString(), state: validate(state)}, null, 2); }
@@ -226,7 +318,7 @@
     });
     saveQueue = operation; return operation;
   }
-  const api = {VERSION, APP_ID, DB_NAME, DEFAULT_SETTINGS, LONG_TERM_GAP_MS, day, addDays, markStudyDay, streak, validDay, daysBetween, fresh, createDeck, updateDeckWords, wordState, see, answer, reviewInfo, dueWords, nextNewWords, stats, shuffle, overlap, chooseOptions, validate, validatedSettings, exportBackup, importBackup, load, save};
+  const api = {VERSION, APP_ID, DB_NAME, DEFAULT_SETTINGS, LONG_TERM_GAP_MS, day, addDays, markStudyDay, streak, recordStudyTime, recordDailyAnswer, recommendDailyPlans, dailyPlan, setDailyPlan, weeklyReport, validDay, daysBetween, fresh, createDeck, updateDeckWords, wordState, see, answer, reviewInfo, dueWords, nextNewWords, stats, shuffle, overlap, chooseOptions, validate, validatedSettings, exportBackup, importBackup, load, save};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.PublicModel = api;
 })(typeof window !== 'undefined' ? window : globalThis);

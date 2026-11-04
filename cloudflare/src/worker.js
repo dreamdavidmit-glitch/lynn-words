@@ -73,6 +73,12 @@ function json(request, env, data, status = 200) {
   return new Response(JSON.stringify(data), {status, headers: headers(request, env, {'Content-Type': 'application/json; charset=utf-8'})});
 }
 
+function blobValue(value) {
+  if (value instanceof ArrayBuffer) return value;
+  if (ArrayBuffer.isView(value)) return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+  return Uint8Array.from(value || []).buffer;
+}
+
 async function bodyJSON(request) {
   if (Number(request.headers.get('Content-Length') || 0) > 4096) throw new Error('请求内容过大。');
   return request.json();
@@ -181,8 +187,8 @@ async function login(request, env) {
 
 async function adminStatus(request, env) {
   if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
-  const [auth, state, generation] = await Promise.all([env.DB.prepare('SELECT COUNT(*) AS count FROM auth').first(), env.DB.prepare('SELECT COUNT(*) AS count FROM sync_state').first(), currentGeneration(env)]);
-  return json(request, env, {initialized: Number(auth?.count) > 0, hasProgress: Number(state?.count) > 0, generation});
+  const [auth, state, snapshots, generation] = await Promise.all([env.DB.prepare('SELECT COUNT(*) AS count FROM auth').first(), env.DB.prepare('SELECT COUNT(*) AS count FROM sync_state').first(), env.DB.prepare('SELECT COUNT(*) AS count FROM progress_snapshots').first(), currentGeneration(env)]);
+  return json(request, env, {initialized: Number(auth?.count) > 0, hasProgress: Number(state?.count) > 0, snapshots: Number(snapshots?.count) || 0, generation});
 }
 
 async function adminReset(request, env) {
@@ -192,6 +198,39 @@ async function adminReset(request, env) {
   const generation = await currentGeneration(env);
   const state = await env.DB.prepare('SELECT COUNT(*) AS count FROM sync_state').first();
   return json(request, env, {ok: true, preservedProgress: Number(state?.count) > 0, setupToken: await issueToken(env.SESSION_SECRET, {role: 'setup', generation}, SETUP_TOKEN_LIFETIME_SECONDS), expiresIn: SETUP_TOKEN_LIFETIME_SECONDS});
+}
+
+async function adminSnapshots(request, env) {
+  if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
+  const [rows, current] = await Promise.all([
+    env.DB.prepare('SELECT id, revision, created_at, device_id, reason FROM progress_snapshots ORDER BY created_at DESC, id DESC LIMIT 7').all(),
+    env.DB.prepare('SELECT revision FROM sync_state WHERE id = 1').first()
+  ]);
+  return json(request, env, {currentRevision: Number(current?.revision) || 0, snapshots: (rows.results || []).map(row => ({id: Number(row.id), revision: Number(row.revision), createdAt: row.created_at, deviceId: row.device_id, reason: row.reason, current: Number(row.revision) === Number(current?.revision)}))});
+}
+
+async function adminRestoreSnapshot(request, env) {
+  if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
+  const body = await bodyJSON(request), id = Number(body.id);
+  if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error: '历史记录编号无效。'}, 400);
+  const [snapshot, current] = await Promise.all([
+    env.DB.prepare('SELECT id, encoding, payload FROM progress_snapshots WHERE id = ?').bind(id).first(),
+    env.DB.prepare('SELECT revision FROM sync_state WHERE id = 1').first()
+  ]);
+  if (!snapshot || !current) return json(request, env, {error: '这份历史记录已经不在最近 7 次之内。'}, 404);
+  const nextRevision = Number(current.revision) + 1, updatedAt = new Date().toISOString(), deviceId = 'admin-restore';
+  const snapshotPayload = blobValue(snapshot.payload);
+  const results = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO progress_snapshots (revision, created_at, device_id, encoding, payload, reason)
+      SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND revision = ?)`)
+      .bind(nextRevision, updatedAt, deviceId, snapshot.encoding, snapshotPayload, `restore:${id}`, current.revision),
+    env.DB.prepare('UPDATE sync_state SET revision = ?, updated_at = ?, device_id = ?, encoding = ?, payload = ? WHERE id = 1 AND revision = ?')
+      .bind(nextRevision, updatedAt, deviceId, snapshot.encoding, snapshotPayload, current.revision),
+    env.DB.prepare('DELETE FROM progress_snapshots WHERE id NOT IN (SELECT id FROM progress_snapshots ORDER BY created_at DESC, id DESC LIMIT 7)')
+  ]);
+  if (!results[1]?.meta?.changes) return json(request, env, {error: '云端进度刚刚发生变化，请刷新历史记录后再试。'}, 409);
+  console.log(JSON.stringify({event: 'snapshot_restored', revision: nextRevision, snapshotId: id}));
+  return json(request, env, {ok: true, revision: nextRevision, updatedAt, restoredFrom: id});
 }
 
 async function readState(request, env) {
@@ -214,13 +253,29 @@ async function writeState(request, env) {
   const updatedAt = new Date().toISOString();
   if (!current) {
     if (baseRevision !== 0) return json(request, env, {error: '云端版本已经变化。', revision: 0}, 409);
-    await env.DB.prepare('INSERT INTO sync_state (id, revision, updated_at, device_id, encoding, payload) VALUES (1, 1, ?, ?, ?, ?)').bind(updatedAt, deviceId, encoding, payload).run();
+    try {
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO sync_state (id, revision, updated_at, device_id, encoding, payload) VALUES (1, 1, ?, ?, ?, ?)').bind(updatedAt, deviceId, encoding, payload),
+        env.DB.prepare('INSERT INTO progress_snapshots (revision, created_at, device_id, encoding, payload, reason) VALUES (1, ?, ?, ?, ?, ?)').bind(updatedAt, deviceId, encoding, payload, 'sync'),
+        env.DB.prepare('DELETE FROM progress_snapshots WHERE id NOT IN (SELECT id FROM progress_snapshots ORDER BY created_at DESC, id DESC LIMIT 7)')
+      ]);
+    } catch (error) {
+      const raced = await env.DB.prepare('SELECT revision, updated_at, device_id FROM sync_state WHERE id = 1').first();
+      if (raced) return json(request, env, {error: '另一台设备已经更新了进度。', revision: raced.revision, updatedAt: raced.updated_at, deviceId: raced.device_id}, 409);
+      throw error;
+    }
     return json(request, env, {revision: 1, updatedAt, deviceId});
   }
   if (current.revision !== baseRevision) return json(request, env, {error: '另一台设备已经更新了进度。', revision: current.revision, updatedAt: current.updated_at, deviceId: current.device_id}, 409);
   const nextRevision = current.revision + 1;
-  const result = await env.DB.prepare('UPDATE sync_state SET revision = ?, updated_at = ?, device_id = ?, encoding = ?, payload = ? WHERE id = 1 AND revision = ?').bind(nextRevision, updatedAt, deviceId, encoding, payload, current.revision).run();
-  if (!result.meta?.changes) return json(request, env, {error: '另一台设备刚刚更新了进度。'}, 409);
+  const results = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO progress_snapshots (revision, created_at, device_id, encoding, payload, reason)
+      SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND revision = ?)`)
+      .bind(nextRevision, updatedAt, deviceId, encoding, payload, 'sync', current.revision),
+    env.DB.prepare('UPDATE sync_state SET revision = ?, updated_at = ?, device_id = ?, encoding = ?, payload = ? WHERE id = 1 AND revision = ?').bind(nextRevision, updatedAt, deviceId, encoding, payload, current.revision),
+    env.DB.prepare('DELETE FROM progress_snapshots WHERE id NOT IN (SELECT id FROM progress_snapshots ORDER BY created_at DESC, id DESC LIMIT 7)')
+  ]);
+  if (!results[1]?.meta?.changes) return json(request, env, {error: '另一台设备刚刚更新了进度。'}, 409);
   return json(request, env, {revision: nextRevision, updatedAt, deviceId});
 }
 
@@ -233,13 +288,15 @@ export default {
       if (url.pathname === '/admin/session' && request.method === 'POST') return await adminSession(request, env);
       if (url.pathname === '/admin/status' && request.method === 'GET') return await adminStatus(request, env);
       if (url.pathname === '/admin/reset' && request.method === 'POST') return await adminReset(request, env);
+      if (url.pathname === '/admin/snapshots' && request.method === 'GET') return await adminSnapshots(request, env);
+      if (url.pathname === '/admin/snapshots/restore' && request.method === 'POST') return await adminRestoreSnapshot(request, env);
       if (url.pathname === '/claim' && request.method === 'POST') return await claim(request, env);
       if (url.pathname === '/session' && request.method === 'POST') return await login(request, env);
       if (url.pathname === '/state' && request.method === 'GET') return await readState(request, env);
       if (url.pathname === '/state' && request.method === 'PUT') return await writeState(request, env);
       return json(request, env, {error: '接口不存在。'}, 404);
     } catch (error) {
-      console.error(error);
+      console.error(JSON.stringify({event: 'worker_error', path: new URL(request.url).pathname, message: error?.message || String(error)}));
       return json(request, env, {error: '同步服务暂时出了点问题，请稍后再试。'}, 500);
     }
   }

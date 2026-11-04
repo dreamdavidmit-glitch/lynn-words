@@ -4,6 +4,10 @@
   "main": "src/worker.js",
   "compatibility_date": "2026-11-03",
   "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "vars": {
     "ALLOWED_ORIGIN": "https://dreamdavidmit-glitch.github.io"
   },

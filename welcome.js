@@ -128,6 +128,10 @@
 
   function showRelease(release, onClose) {
     if (!release?.id || !root.document || root.document.querySelector('.daily-welcome')) return false;
+    if (release.level === 'minor') {
+      try { root.localStorage?.setItem(RELEASE_STORAGE_KEY, release.id); } catch (_) {}
+      return false;
+    }
     try { if (root.localStorage?.getItem(RELEASE_STORAGE_KEY) === release.id) return false; }
     catch (_) {}
     const reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;

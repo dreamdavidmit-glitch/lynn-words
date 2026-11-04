@@ -25,11 +25,14 @@
       const key = word.toLowerCase();
       if (byWord.has(key)) {
         const old = byWord.get(key);
+        old.duplicateCount = (old.duplicateCount || 1) + 1;
+        const nextSource = clean(sourceLine).slice(0, 500);
+        if (nextSource && !old.sourceLine.includes(nextSource)) old.sourceLine = (old.sourceLine + '\n' + nextSource).slice(0, 1500);
         if (meaning && !old.meaning) old.meaning = meaning;
         else if (meaning && old.meaning !== meaning && !old.meaning.split('；').includes(meaning)) old.meaning += '；' + meaning;
         return old;
       }
-      const item = {word, meaning, sourceLine: clean(sourceLine).slice(0, 500), selected: true, ...extra};
+      const item = {word, meaning, sourceLine: clean(sourceLine).slice(0, 500), selected: true, duplicateCount: 1, ...extra};
       rows.push(item); byWord.set(key, item); return item;
     }
     if (mode === 'article') {
@@ -81,6 +84,24 @@
     }
     return rows;
   }
+  function audit(rows) {
+    if (!Array.isArray(rows)) return [];
+    for (const row of rows) {
+      const word = clean(row.word), meaning = clean(row.meaning), issues = [];
+      if (!word || !/[A-Za-z]/.test(word)) issues.push('英文栏需要检查');
+      if (!meaning) issues.push('缺少中文意思');
+      else if (!HAN.test(meaning)) issues.push('中文栏可能错位');
+      if (word.length > 70 || /[^A-Za-z0-9 '\-()/.&]/.test(word) || /(?:[A-Za-z]\d|\d[A-Za-z])/.test(word)) issues.push('拼写看起来不确定');
+      if (/\b(?:page|unit|list|chapter)\s*\d*\b/i.test(word) || HEADER.test(word)) issues.push('可能是页眉，不是单词');
+      if ((row.duplicateCount || 1) > 1) issues.push(`已合并 ${row.duplicateCount} 条重复词`);
+      row.issues = [...new Set(issues)];
+      row.needsReview = row.issues.some(issue => !issue.startsWith('已合并'));
+      row.confidence = row.needsReview ? 'low' : row.issues.length ? 'medium' : 'high';
+      if (!row.needsReview) row.confirmed = true;
+      else if (typeof row.confirmed !== 'boolean') row.confirmed = false;
+    }
+    return rows;
+  }
   // Reconstruct lines from PDF text coordinates before the parser sees them.
   // A large x gap becomes a cell delimiter; small gaps preserve English phrases.
   function layoutText(items) {
@@ -106,7 +127,7 @@
       return result.trim();
     }).join('\n');
   }
-  const api = {parse, layoutText, clean};
+  const api = {parse, audit, layoutText, clean};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.ExtractWords = api;
 })(typeof window !== 'undefined' ? window : globalThis);
