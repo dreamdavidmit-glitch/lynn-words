@@ -136,7 +136,7 @@
     catch (_) {}
     const reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const previousFocus = root.document.activeElement;
-    const items = Array.isArray(release.items) ? release.items.slice(0, 12) : [];
+    const items = Array.isArray(release.items) ? release.items.slice(0, 20) : [];
     const layer = root.document.createElement('div');
     layer.className = 'daily-welcome release-welcome';
     layer.innerHTML = `

@@ -11,6 +11,7 @@ const RATE_WINDOW_SECONDS = 15 * 60;
 const RATE_BLOCK_SECONDS = 15 * 60;
 const RATE_MAX_FAILURES = 5;
 const MAX_MONITORED_SITES = 20;
+const MAX_ROOM_PHOTO = 1_500_000;
 
 function bytesToBase64Url(bytes) {
   let binary = '';
@@ -68,7 +69,7 @@ function allowedOrigin(request, env) {
 }
 
 function headers(request, env, extra = {}) {
-  return {'Access-Control-Allow-Origin': allowedOrigin(request, env), 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Base-Revision, X-Device-Id, X-Payload-Encoding', 'Access-Control-Expose-Headers': 'X-Revision, X-Updated-At, X-Device-Id, X-Payload-Encoding', 'Access-Control-Max-Age': '86400', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', ...extra};
+  return {'Access-Control-Allow-Origin': allowedOrigin(request, env), 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Base-Revision, X-Device-Id, X-Payload-Encoding, X-Photo-Caption', 'Access-Control-Expose-Headers': 'X-Revision, X-Updated-At, X-Device-Id, X-Payload-Encoding', 'Access-Control-Max-Age': '86400', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', ...extra};
 }
 
 function json(request, env, data, status = 200) {
@@ -191,6 +192,60 @@ function presenceFromRow(row, now = Date.now()) {
   if (row.status !== 'offline' && age <= 130_000) state = row.status === 'away' || !Number(row.active) ? 'away' : 'online';
   else if (row.status !== 'offline' && age <= 180_000) state = 'away';
   return {state, studying: state === 'online' && !!Number(row.studying), lastSeenAt: row.last_seen_at};
+}
+
+function validDay(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value + 'T12:00:00Z'));
+}
+
+function companionFromRow(row, now = Date.now()) {
+  const until = row?.active_until || '';
+  return {active: !!until && Date.parse(until) > now, activeUntil: until, updatedAt: row?.updated_at || ''};
+}
+
+async function syncMilestones(env, state, achievedAt = new Date().toISOString()) {
+  const overview = overviewFromState(state, 0, achievedAt);
+  const totals = overview.totals;
+  const completeDeck = overview.decks.find(deck => deck.words > 0 && deck.seen >= deck.words);
+  const candidates = [
+    [totals.studyDays >= 1, 'first-study', '第一次认真出现', '从这一天开始，陌生的词慢慢变成了老朋友。'],
+    [totals.seen >= 100, 'seen-100', '和第 100 个词见面', '已经认识 100 个单词，第一小段路好好走完了。'],
+    [totals.seen >= 500, 'seen-500', '和第 500 个词见面', '五百次见面，已经足够装满小紫怪的一层书架。'],
+    [totals.seen >= 1000, 'seen-1000', '认识了 1000 个词', '四位数的词汇旅程，从每一次小小开始攒起来。'],
+    [totals.remembered >= 100, 'remembered-100', '真正记住 100 个词', '不是见过而已，是经过复习后真的留下来了。'],
+    [totals.remembered >= 500, 'remembered-500', '真正记住 500 个词', '五百个词已经在记忆里拥有自己的位置。'],
+    [totals.studyDays >= 7, 'study-days-7', '认真出现过 7 天', '不用天天拼命，愿意一次次回来就很了不起。'],
+    [totals.studyDays >= 30, 'study-days-30', '认真出现过 30 天', '三十个认真出现过的日子，被小词窝好好收了起来。'],
+    [!!completeDeck, 'first-deck', '第一次走完一本词书', completeDeck ? `《${completeDeck.title}》里的每个词都已经见过面。` : '']
+  ].filter(([ready]) => ready);
+  if (!candidates.length) return;
+  await env.DB.batch(candidates.map(([, code, title, detail]) => env.DB.prepare('INSERT OR IGNORE INTO milestones (code, title, detail, achieved_at) VALUES (?, ?, ?, ?)').bind(code, title, detail, achievedAt)));
+}
+
+async function syncLatestMood(env, state) {
+  const entries = Object.entries(state?.moodLog || {}).filter(([date, entry]) => validDay(date) && entry && ['tired', 'okay', 'good'].includes(entry.level));
+  if (!entries.length) return;
+  entries.sort(([left], [right]) => left.localeCompare(right));
+  const [moodDate, mood] = entries.at(-1), note = typeof mood.note === 'string' ? mood.note.trim().slice(0, 200) : '';
+  const latest = await env.DB.prepare('SELECT level, note FROM moods WHERE mood_date = ? ORDER BY id DESC LIMIT 1').bind(moodDate).first();
+  if (latest?.level === mood.level && latest?.note === note) return;
+  const createdAt = Number.isFinite(Number(mood.createdAt)) ? new Date(Number(mood.createdAt)).toISOString() : new Date().toISOString();
+  await env.DB.prepare('INSERT INTO moods (mood_date, level, note, created_at) VALUES (?, ?, ?, ?)').bind(moodDate, mood.level, note, createdAt).run();
+  await env.DB.prepare('DELETE FROM moods WHERE id NOT IN (SELECT id FROM moods ORDER BY id DESC LIMIT 400)').run();
+}
+
+async function deliverScheduledMessages(env) {
+  const now = new Date().toISOString();
+  const due = await env.DB.prepare('SELECT id FROM scheduled_messages WHERE delivered_at IS NULL AND scheduled_for <= ? ORDER BY scheduled_for LIMIT 20').bind(now).all();
+  let delivered = 0;
+  for (const row of due.results || []) {
+    const claimed = await env.DB.prepare('UPDATE scheduled_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL RETURNING body, scheduled_for').bind(now, row.id).first();
+    if (!claimed) continue;
+    await env.DB.prepare('INSERT INTO messages (sender, body, created_at, read_at) VALUES (?, ?, ?, NULL)').bind('owner', claimed.body, claimed.scheduled_for).run();
+    delivered++;
+  }
+  if (delivered) await env.DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 300)').run();
+  return delivered;
 }
 
 async function bodyJSON(request) {
@@ -360,6 +415,7 @@ async function careSiteStatus(request, env) {
 async function messageThread(request, env, role) {
   const authorized = role === 'owner' ? await careAuthorized(request, env) : await userAuthorized(request, env);
   if (!authorized) return json(request, env, {error: role === 'owner' ? '请重新验证进入密码。' : '请先连接云端进度。'}, 401);
+  await deliverScheduledMessages(env);
   const other = role === 'owner' ? 'lynn' : 'owner';
   const url = new URL(request.url);
   if (url.searchParams.get('read') === '1') {
@@ -379,6 +435,141 @@ async function sendMessage(request, env, sender) {
   const result = await env.DB.prepare('INSERT INTO messages (sender, body, created_at, read_at) VALUES (?, ?, ?, NULL)').bind(sender, text, createdAt).run();
   await env.DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 300)').run();
   return json(request, env, {ok:true, message:{id:Number(result.meta?.last_row_id) || 0, sender, body:text, createdAt, readAt:''}}, 201);
+}
+
+async function careCompanion(request, env) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  if (request.method === 'GET') {
+    const row = await env.DB.prepare('SELECT active_until, updated_at FROM companionship WHERE id = 1').first();
+    return json(request, env, {companion: companionFromRow(row)});
+  }
+  const body = await bodyJSON(request), active = body.active === true;
+  const minutes = Math.max(15, Math.min(120, Number(body.minutes) || 45));
+  const updatedAt = new Date().toISOString(), activeUntil = active ? new Date(Date.now() + minutes * 60_000).toISOString() : null;
+  await env.DB.prepare(`INSERT INTO companionship (id, active_until, updated_at) VALUES (1, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET active_until = excluded.active_until, updated_at = excluded.updated_at`).bind(activeUntil, updatedAt).run();
+  return json(request, env, {ok:true, companion:companionFromRow({active_until:activeUntil, updated_at:updatedAt})});
+}
+
+async function careScheduledMessages(request, env) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  await deliverScheduledMessages(env);
+  if (request.method === 'GET') {
+    const rows = await env.DB.prepare('SELECT id, body, scheduled_for, created_at, delivered_at FROM scheduled_messages ORDER BY scheduled_for DESC LIMIT 50').all();
+    return json(request, env, {messages:(rows.results || []).map(row => ({id:Number(row.id), body:row.body, scheduledFor:row.scheduled_for, createdAt:row.created_at, deliveredAt:row.delivered_at || ''}))});
+  }
+  const body = await bodyJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '';
+  const when = typeof body.scheduledFor === 'string' ? new Date(body.scheduledFor) : new Date(NaN);
+  if (!text || text.length > 500) return json(request, env, {error:'定时留言需要 1 到 500 个字符。'}, 400);
+  if (!Number.isFinite(when.getTime()) || when.getTime() < Date.now() - 60_000 || when.getTime() > Date.now() + 366 * 86400_000) return json(request, env, {error:'请选择未来一年内的有效投递时间。'}, 400);
+  const createdAt = new Date().toISOString(), scheduledFor = when.toISOString();
+  const result = await env.DB.prepare('INSERT INTO scheduled_messages (body, scheduled_for, created_at, delivered_at) VALUES (?, ?, ?, NULL)').bind(text, scheduledFor, createdAt).run();
+  return json(request, env, {ok:true, message:{id:Number(result.meta?.last_row_id) || 0, body:text, scheduledFor, createdAt, deliveredAt:''}}, 201);
+}
+
+async function removeScheduledMessage(request, env, id) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error:'定时留言编号无效。'}, 400);
+  const result = await env.DB.prepare('DELETE FROM scheduled_messages WHERE id = ? AND delivered_at IS NULL').bind(id).run();
+  return json(request, env, {ok:true, removed:Number(result.meta?.changes) || 0});
+}
+
+async function careSurprises(request, env) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  if (request.method === 'GET') {
+    const rows = await env.DB.prepare('SELECT id, body, gift, unlock_date, created_at, opened_at FROM surprise_letters ORDER BY unlock_date DESC, id DESC LIMIT 50').all();
+    return json(request, env, {letters:(rows.results || []).map(row => ({id:Number(row.id), body:row.body, gift:row.gift, unlockDate:row.unlock_date, createdAt:row.created_at, openedAt:row.opened_at || ''}))});
+  }
+  const body = await bodyJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '', gift = typeof body.gift === 'string' ? body.gift.trim() : '💜', unlockDate = String(body.unlockDate || '');
+  if (!text || text.length > 500) return json(request, env, {error:'惊喜信需要 1 到 500 个字符。'}, 400);
+  if (!gift || [...gift].length > 4) return json(request, env, {error:'请选择一个简短的礼物图标。'}, 400);
+  if (!validDay(unlockDate)) return json(request, env, {error:'惊喜信日期无效。'}, 400);
+  const createdAt = new Date().toISOString();
+  const result = await env.DB.prepare('INSERT INTO surprise_letters (body, gift, unlock_date, created_at, opened_at) VALUES (?, ?, ?, ?, NULL)').bind(text, gift, unlockDate, createdAt).run();
+  return json(request, env, {ok:true, letter:{id:Number(result.meta?.last_row_id) || 0, body:text, gift, unlockDate, createdAt, openedAt:''}}, 201);
+}
+
+async function removeSurprise(request, env, id) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error:'惊喜信编号无效。'}, 400);
+  const result = await env.DB.prepare('DELETE FROM surprise_letters WHERE id = ? AND opened_at IS NULL').bind(id).run();
+  return json(request, env, {ok:true, removed:Number(result.meta?.changes) || 0});
+}
+
+async function companionHome(request, env) {
+  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
+  await deliverScheduledMessages(env);
+  const stateRow = await env.DB.prepare('SELECT encoding, payload FROM sync_state WHERE id = 1').first();
+  if (stateRow) {
+    try { await syncMilestones(env, await stateFromPayload(stateRow.payload, stateRow.encoding)); }
+    catch (error) { console.error(JSON.stringify({event:'milestone_sync_failed', message:error?.message || String(error)})); }
+  }
+  const [companion, milestones, surprises, photos] = await Promise.all([
+    env.DB.prepare('SELECT active_until, updated_at FROM companionship WHERE id = 1').first(),
+    env.DB.prepare('SELECT code, title, detail, achieved_at FROM milestones ORDER BY achieved_at DESC LIMIT 30').all(),
+    env.DB.prepare('SELECT id, body, gift, unlock_date, created_at, opened_at FROM surprise_letters WHERE opened_at IS NULL ORDER BY unlock_date, id LIMIT 10').all(),
+    env.DB.prepare('SELECT id, caption, content_type, created_at FROM room_photos ORDER BY created_at DESC, id DESC LIMIT 12').all()
+  ]);
+  return json(request, env, {
+    companion:companionFromRow(companion),
+    milestones:(milestones.results || []).map(row => ({code:row.code, title:row.title, detail:row.detail, achievedAt:row.achieved_at})),
+    surprises:(surprises.results || []).map(row => ({id:Number(row.id), body:row.body, gift:row.gift, unlockDate:row.unlock_date, createdAt:row.created_at, openedAt:row.opened_at || ''})),
+    photos:(photos.results || []).map(row => ({id:Number(row.id), caption:row.caption, contentType:row.content_type, createdAt:row.created_at}))
+  });
+}
+
+async function recordMood(request, env) {
+  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
+  const body = await bodyJSON(request), level = String(body.level || ''), note = typeof body.note === 'string' ? body.note.trim() : '', moodDate = String(body.date || '');
+  if (!['tired', 'okay', 'good'].includes(level) || !validDay(moodDate)) return json(request, env, {error:'今天的心情格式不正确。'}, 400);
+  if (note.length > 200) return json(request, env, {error:'心情文字最多 200 个字符。'}, 400);
+  const createdAt = new Date().toISOString();
+  await env.DB.prepare('INSERT INTO moods (mood_date, level, note, created_at) VALUES (?, ?, ?, ?)').bind(moodDate, level, note, createdAt).run();
+  await env.DB.prepare('DELETE FROM moods WHERE id NOT IN (SELECT id FROM moods ORDER BY id DESC LIMIT 400)').run();
+  return json(request, env, {ok:true, mood:{date:moodDate, level, note, createdAt}}, 201);
+}
+
+async function openSurprise(request, env, id) {
+  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
+  if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error:'惊喜信编号无效。'}, 400);
+  const openedAt = new Date().toISOString();
+  const letter = await env.DB.prepare('UPDATE surprise_letters SET opened_at = ? WHERE id = ? AND opened_at IS NULL RETURNING id, body, gift, unlock_date, created_at, opened_at').bind(openedAt, id).first();
+  if (!letter) return json(request, env, {error:'这封惊喜信已经打开或不存在。'}, 404);
+  return json(request, env, {ok:true, letter:{id:Number(letter.id), body:letter.body, gift:letter.gift, unlockDate:letter.unlock_date, createdAt:letter.created_at, openedAt:letter.opened_at}});
+}
+
+async function uploadRoomPhoto(request, env) {
+  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
+  const photoCount = await env.DB.prepare('SELECT COUNT(*) AS count FROM room_photos').first();
+  if (Number(photoCount?.count) >= 12) return json(request, env, {error:'照片墙最多放 12 张，先移除一张再添加吧。'}, 409);
+  const contentType = (request.headers.get('Content-Type') || '').split(';')[0].toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) return json(request, env, {error:'请选择 JPG、PNG 或 WebP 图片。'}, 415);
+  const declared = Number(request.headers.get('Content-Length') || 0);
+  if (declared > MAX_ROOM_PHOTO) return json(request, env, {error:'压缩后的图片不能超过 1.5 MB。'}, 413);
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (!bytes.byteLength || bytes.byteLength > MAX_ROOM_PHOTO) return json(request, env, {error:'压缩后的图片不能超过 1.5 MB。'}, 413);
+  let caption = '';
+  try { caption = decodeURIComponent(request.headers.get('X-Photo-Caption') || '').trim().slice(0, 120); }
+  catch (_) { return json(request, env, {error:'照片说明格式不正确。'}, 400); }
+  const key = `d1:${crypto.randomUUID()}`;
+  const createdAt = new Date().toISOString();
+  const result = await env.DB.prepare('INSERT INTO room_photos (object_key, content_type, caption, created_at, blob_data) VALUES (?, ?, ?, ?, ?)').bind(key, contentType, caption, createdAt, bytes).run();
+  return json(request, env, {ok:true, photo:{id:Number(result.meta?.last_row_id) || 0, caption, contentType, createdAt}}, 201);
+}
+
+async function roomPhoto(request, env, id) {
+  const authorized = await userAuthorized(request, env) || await careAuthorized(request, env);
+  if (!authorized) return json(request, env, {error:'没有权限查看这张图片。'}, 401);
+  const row = await env.DB.prepare('SELECT content_type, blob_data FROM room_photos WHERE id = ?').bind(id).first();
+  if (!row?.blob_data) return json(request, env, {error:'图片不存在。'}, 404);
+  const bytes = blobValue(row.blob_data);
+  return new Response(bytes, {headers:headers(request, env, {'Content-Type':row.content_type, 'Content-Length':String(bytes.byteLength), 'Cache-Control':'private, max-age=300'})});
+}
+
+async function removeRoomPhoto(request, env, id) {
+  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
+  const result = await env.DB.prepare('DELETE FROM room_photos WHERE id = ?').bind(id).run();
+  return json(request, env, {ok:true, removed:Number(result.meta?.changes) || 0});
 }
 
 async function claim(request, env) {
@@ -427,13 +618,24 @@ async function adminStatus(request, env) {
 
 async function adminOverview(request, env) {
   if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
-  const [row, presence] = await Promise.all([
+  const [row, presence, mood, milestones, companion] = await Promise.all([
     env.DB.prepare('SELECT revision, updated_at, encoding, payload FROM sync_state WHERE id = 1').first(),
-    env.DB.prepare('SELECT status, studying, active, last_seen_at FROM presence WHERE id = 1').first()
+    env.DB.prepare('SELECT status, studying, active, last_seen_at FROM presence WHERE id = 1').first(),
+    env.DB.prepare('SELECT mood_date, level, note, created_at FROM moods ORDER BY id DESC LIMIT 1').first(),
+    env.DB.prepare('SELECT code, title, detail, achieved_at FROM milestones ORDER BY achieved_at DESC LIMIT 30').all(),
+    env.DB.prepare('SELECT active_until, updated_at FROM companionship WHERE id = 1').first()
   ]);
   if (!row) return json(request, env, {error: '云端还没有学习记录。'}, 404);
   const state = await stateFromPayload(row.payload, row.encoding);
-  return json(request, env, {...overviewFromState(state, row.revision, row.updated_at), presence: presenceFromRow(presence)});
+  await syncMilestones(env, state);
+  const currentMilestones = await env.DB.prepare('SELECT code, title, detail, achieved_at FROM milestones ORDER BY achieved_at DESC LIMIT 30').all();
+  return json(request, env, {
+    ...overviewFromState(state, row.revision, row.updated_at),
+    presence: presenceFromRow(presence),
+    mood:mood ? {date:mood.mood_date, level:mood.level, note:mood.note, createdAt:mood.created_at} : null,
+    milestones:(currentMilestones.results || milestones.results || []).map(item => ({code:item.code, title:item.title, detail:item.detail, achievedAt:item.achieved_at})),
+    companion:companionFromRow(companion)
+  });
 }
 
 async function updatePresence(request, env) {
@@ -543,6 +745,7 @@ async function writeState(request, env) {
       if (raced) return json(request, env, {error: '另一台设备已经更新了进度。', revision: raced.revision, updatedAt: raced.updated_at, deviceId: raced.device_id}, 409);
       throw error;
     }
+    try { const state = await stateFromPayload(payload, encoding); await syncMilestones(env, state, updatedAt); await syncLatestMood(env, state); } catch (error) { console.error(JSON.stringify({event:'companion_sync_failed', message:error?.message || String(error)})); }
     return json(request, env, {revision: 1, updatedAt, deviceId});
   }
   if (current.revision !== baseRevision) return json(request, env, {error: '另一台设备已经更新了进度。', revision: current.revision, updatedAt: current.updated_at, deviceId: current.device_id}, 409);
@@ -555,6 +758,7 @@ async function writeState(request, env) {
     env.DB.prepare('DELETE FROM progress_snapshots WHERE id NOT IN (SELECT id FROM progress_snapshots ORDER BY created_at DESC, id DESC LIMIT 7)')
   ]);
   if (!results[1]?.meta?.changes) return json(request, env, {error: '另一台设备刚刚更新了进度。'}, 409);
+  try { const state = await stateFromPayload(payload, encoding); await syncMilestones(env, state, updatedAt); await syncLatestMood(env, state); } catch (error) { console.error(JSON.stringify({event:'companion_sync_failed', message:error?.message || String(error)})); }
   return json(request, env, {revision: nextRevision, updatedAt, deviceId});
 }
 
@@ -571,8 +775,15 @@ export default {
       if (url.pathname === '/care/sites/status' && request.method === 'GET') return await careSiteStatus(request, env);
       if (url.pathname === '/care/messages' && request.method === 'GET') return await messageThread(request, env, 'owner');
       if (url.pathname === '/care/messages' && request.method === 'POST') return await sendMessage(request, env, 'owner');
+      if (url.pathname === '/care/companion' && ['GET', 'POST'].includes(request.method)) return await careCompanion(request, env);
+      if (url.pathname === '/care/scheduled' && ['GET', 'POST'].includes(request.method)) return await careScheduledMessages(request, env);
+      if (url.pathname === '/care/surprises' && ['GET', 'POST'].includes(request.method)) return await careSurprises(request, env);
       const careSiteDelete = url.pathname.match(/^\/care\/sites\/(\d+)$/);
       if (careSiteDelete && request.method === 'DELETE') return await removeCareSite(request, env, Number(careSiteDelete[1]));
+      const scheduledDelete = url.pathname.match(/^\/care\/scheduled\/(\d+)$/);
+      if (scheduledDelete && request.method === 'DELETE') return await removeScheduledMessage(request, env, Number(scheduledDelete[1]));
+      const surpriseDelete = url.pathname.match(/^\/care\/surprises\/(\d+)$/);
+      if (surpriseDelete && request.method === 'DELETE') return await removeSurprise(request, env, Number(surpriseDelete[1]));
       if (url.pathname === '/admin/status' && request.method === 'GET') return await adminStatus(request, env);
       if (url.pathname === '/admin/overview' && request.method === 'GET') return await adminOverview(request, env);
       if (url.pathname === '/admin/reset' && request.method === 'POST') return await adminReset(request, env);
@@ -585,6 +796,14 @@ export default {
       if (url.pathname === '/presence' && request.method === 'POST') return await updatePresence(request, env);
       if (url.pathname === '/messages' && request.method === 'GET') return await messageThread(request, env, 'lynn');
       if (url.pathname === '/messages' && request.method === 'POST') return await sendMessage(request, env, 'lynn');
+      if (url.pathname === '/companion' && request.method === 'GET') return await companionHome(request, env);
+      if (url.pathname === '/mood' && request.method === 'POST') return await recordMood(request, env);
+      if (url.pathname === '/room/photos' && request.method === 'POST') return await uploadRoomPhoto(request, env);
+      const surpriseOpen = url.pathname.match(/^\/surprises\/(\d+)\/open$/);
+      if (surpriseOpen && request.method === 'POST') return await openSurprise(request, env, Number(surpriseOpen[1]));
+      const roomPhotoRoute = url.pathname.match(/^\/room\/photos\/(\d+)$/);
+      if (roomPhotoRoute && request.method === 'GET') return await roomPhoto(request, env, Number(roomPhotoRoute[1]));
+      if (roomPhotoRoute && request.method === 'DELETE') return await removeRoomPhoto(request, env, Number(roomPhotoRoute[1]));
       if (url.pathname === '/state' && request.method === 'GET') return await readState(request, env);
       if (url.pathname === '/state' && request.method === 'PUT') return await writeState(request, env);
       return json(request, env, {error: '接口不存在。'}, 404);

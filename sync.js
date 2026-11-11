@@ -134,6 +134,45 @@
     return response.json();
   }
 
+  async function companion() {
+    if (!token()) throw new Error('先连接云端进度，才能打开陪伴空间。');
+    const response = await api('/companion');
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
+  async function saveMood(level, note, date) {
+    if (!token()) return null;
+    const response = await api('/mood', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({level, note, date})});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
+  async function openSurprise(id) {
+    const response = await api(`/surprises/${Number(id)}/open`, {method:'POST'});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
+  async function uploadRoomPhoto(blob, caption = '') {
+    if (!token()) throw new Error('先连接云端进度，才能把照片放进房间。');
+    const response = await api('/room/photos', {method:'POST', headers:{'Content-Type':blob.type || 'image/jpeg', 'X-Photo-Caption':encodeURIComponent(String(caption).slice(0, 120))}, body:blob});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
+  async function roomPhoto(id) {
+    const response = await api(`/room/photos/${Number(id)}`);
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.blob();
+  }
+
+  async function removeRoomPhoto(id) {
+    const response = await api(`/room/photos/${Number(id)}`, {method:'DELETE'});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
   async function readRemote() {
     const response = await api('/state');
     if (response.status === 404) return null;
@@ -394,5 +433,5 @@
     clearInterval(presenceTimer); presenceTimer = root.setInterval(() => { if (!root.document.hidden) reportPresence('online'); }, 55_000);
   }
 
-  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, messages, reply, connected: () => !!token(), status: () => ({...status})};
+  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, messages, reply, companion, saveMood, openSurprise, uploadRoomPhoto, roomPhoto, removeRoomPhoto, connected: () => !!token(), status: () => ({...status})};
 })(typeof window !== 'undefined' ? window : globalThis);

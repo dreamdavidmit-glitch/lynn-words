@@ -18,7 +18,7 @@
   function daysBetween(from, to) { return Math.round((Date.parse(to + 'T12:00:00Z') - Date.parse(from + 'T12:00:00Z')) / 86400000); }
   function checkStamp(now) { if (!validStamp(now)) throw new Error('学习时间无效。'); }
   function uuid(prefix) { return prefix + '-' + (root.crypto?.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)); }
-  function fresh() { return {version: VERSION, decks: [], settings: {...DEFAULT_SETTINGS}, activeDeckId: null, studyDays: [], dailyLog: {}, dailyPlan: null}; }
+  function fresh() { return {version: VERSION, decks: [], settings: {...DEFAULT_SETTINGS}, activeDeckId: null, studyDays: [], dailyLog: {}, dailyPlan: null, moodLog: {}}; }
   function markStudyDay(state, now = Date.now()) { checkStamp(now); const today = day(now); if (!Array.isArray(state.studyDays)) state.studyDays = []; if (!state.studyDays.includes(today)) { state.studyDays.push(today); state.studyDays.sort(); if (state.studyDays.length > 3660) state.studyDays.splice(0, state.studyDays.length - 3660); } return state.studyDays; }
   function streak(state, now = Date.now()) { const days = new Set(Array.isArray(state.studyDays) ? state.studyDays : []); let cursor = day(now), count = 0; if (!days.has(cursor)) cursor = addDays(cursor, -1); while (days.has(cursor)) { count++; cursor = addDays(cursor, -1); } return {count, today: days.has(day(now)), total: days.size}; }
   function dailyEntry(state, now = Date.now()) {
@@ -39,6 +39,18 @@
   function recordDailyAnswer(state, right, now = Date.now()) {
     if (typeof right !== 'boolean') throw new Error('答题结果必须是对或错。');
     const entry = dailyEntry(state, now); entry.attempts++; entry.correct += right ? 1 : 0; entry.wrong += right ? 0 : 1; markStudyDay(state, now); return entry;
+  }
+  function recordMood(state, level, note = '', now = Date.now()) {
+    checkStamp(now);
+    if (!['tired', 'okay', 'good'].includes(level)) throw new Error('请选择今天的心情。');
+    const text = cleanText(note, 200, '今日心情');
+    if (!isRecord(state.moodLog)) state.moodLog = {};
+    const date = day(now);
+    state.moodLog[date] = {level, note: text, createdAt: now};
+    const keys = Object.keys(state.moodLog).filter(validDay).sort();
+    if (keys.length > 400) for (const old of keys.slice(0, keys.length - 400)) delete state.moodLog[old];
+    state.dailyPlan = null;
+    return state.moodLog[date];
   }
   function cleanText(value, max, label, empty = true) {
     if (typeof value !== 'string' || value.length > max || (!empty && !value.trim())) throw new Error(label + '格式不正确。');
@@ -204,6 +216,10 @@
     else if (accuracy !== null && accuracy < .68) { recommended = 'light'; reason = '最近正确率有点累，今天少背一点、记牢一点更划算。'; }
     else if (averageMinutes >= 38) { recommended = 'light'; reason = '最近每天花的时间已经不少，今天给大脑留一点余地。'; }
     else if (accuracy !== null && accuracy >= .9 && due < 5 && averageMinutes > 0 && averageMinutes < 25) { recommended = 'sprint'; reason = '最近答得又稳又快，今天状态允许的话可以多走一小段。'; }
+    const todayMood = state.moodLog?.[today];
+    if (todayMood?.level === 'tired') { recommended = 'light'; reason = '你说今天有点累，所以任务自动变轻。完成这些就可以安心休息。'; }
+    else if (todayMood?.level === 'okay') { recommended = 'normal'; reason = '今天状态一般，按适中的节奏走，不赶时间也不硬撑。'; }
+    else if (todayMood?.level === 'good') { recommended = 'sprint'; reason = '你说今天状态很好，可以多走一小段；中途累了随时切回轻松。'; }
     const names = {light: '轻松', normal: '适中', sprint: '冲刺'};
     const plans = Object.keys(targets).map(mode => ({mode, name: names[mode], target: targets[mode], estimatedMinutes: Math.max(5, Math.round((targets[mode] * 1.1 + Math.min(due, 30) * .3) / 5) * 5)}));
     return {date: today, recommended, reason, accuracy, attempts, averageMinutes: Math.round(averageMinutes), due, plans};
@@ -274,6 +290,10 @@
       const localEntry = out.dailyLog[date] || {activeMs: 0, attempts: 0, correct: 0, wrong: 0, rescueDone: []};
       const localAttempts = localEntry.attempts || 0, remoteAttempts = remoteEntry.attempts || 0, preferred = remoteAttempts > localAttempts ? remoteEntry : localEntry;
       out.dailyLog[date] = {activeMs: Math.max(localEntry.activeMs || 0, remoteEntry.activeMs || 0), attempts: preferred.attempts || 0, correct: preferred.correct || 0, wrong: preferred.wrong || 0, rescueDone: [...new Set([...(localEntry.rescueDone || []), ...(remoteEntry.rescueDone || [])])].slice(-100)};
+    }
+    for (const [date, remoteMood] of Object.entries(remote.moodLog || {})) {
+      const localMood = out.moodLog?.[date];
+      if (!localMood || remoteMood.createdAt > localMood.createdAt) out.moodLog[date] = remoteMood;
     }
     if (!out.activeDeckId || !out.decks.some(deck => deck.id === out.activeDeckId)) out.activeDeckId = remote.activeDeckId;
     if (!out.dailyPlan && remote.dailyPlan) out.dailyPlan = remote.dailyPlan;
@@ -355,6 +375,14 @@
       if (!isRecord(raw.dailyPlan) || !validDay(raw.dailyPlan.date) || !['light', 'normal', 'sprint'].includes(raw.dailyPlan.mode)) throw new Error('每日任务选择格式不正确。');
       state.dailyPlan = {date: raw.dailyPlan.date, mode: raw.dailyPlan.mode, target: integer(raw.dailyPlan.target, 5, 40, '每日任务量')};
     }
+    if (raw.moodLog != null) {
+      if (!isRecord(raw.moodLog) || Object.keys(raw.moodLog).length > 400) throw new Error('心情记录格式不正确。');
+      state.moodLog = {};
+      for (const [date, entry] of Object.entries(raw.moodLog)) {
+        if (!validDay(date) || !isRecord(entry) || !['tired', 'okay', 'good'].includes(entry.level) || !validStamp(entry.createdAt)) throw new Error('心情记录格式不正确。');
+        state.moodLog[date] = {level: entry.level, note: cleanText(entry.note ?? '', 200, '心情记录'), createdAt: entry.createdAt};
+      }
+    }
     return state;
   }
   function exportBackup(state) { return JSON.stringify({app: APP_ID, version: VERSION, exportedAt: new Date().toISOString(), state: validate(state)}, null, 2); }
@@ -396,7 +424,7 @@
     });
     saveQueue = operation; return operation;
   }
-  const api = {VERSION, APP_ID, DB_NAME, DEFAULT_SETTINGS, LONG_TERM_GAP_MS, SLOW_RESPONSE_MS, day, addDays, markStudyDay, streak, recordStudyTime, recordDailyAnswer, recommendDailyPlans, dailyPlan, setDailyPlan, weeklyReport, activityCalendar, rescueWords, markRescueDone, mergeStates, validDay, daysBetween, fresh, createDeck, updateDeckWords, wordState, see, answer, reviewInfo, dueWords, nextNewWords, stats, shuffle, overlap, chooseOptions, validate, validatedSettings, exportBackup, importBackup, load, save};
+  const api = {VERSION, APP_ID, DB_NAME, DEFAULT_SETTINGS, LONG_TERM_GAP_MS, SLOW_RESPONSE_MS, day, addDays, markStudyDay, streak, recordStudyTime, recordDailyAnswer, recordMood, recommendDailyPlans, dailyPlan, setDailyPlan, weeklyReport, activityCalendar, rescueWords, markRescueDone, mergeStates, validDay, daysBetween, fresh, createDeck, updateDeckWords, wordState, see, answer, reviewInfo, dueWords, nextNewWords, stats, shuffle, overlap, chooseOptions, validate, validatedSettings, exportBackup, importBackup, load, save};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.PublicModel = api;
 })(typeof window !== 'undefined' ? window : globalThis);

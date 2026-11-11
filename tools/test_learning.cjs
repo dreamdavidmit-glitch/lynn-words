@@ -26,6 +26,18 @@ const lighter = M.dailyPlan(state, deck, state.settings, now);
 assert.equal(lighter.recommended, 'light');
 assert.ok(lighter.target < lighter.plans.find(plan => plan.mode === 'normal').target);
 
+const moodState = M.fresh();
+const moodDeck = M.createDeck('心情测试', [{word:'rest', meaning:'休息'}], now);
+moodState.decks.push(moodDeck); moodState.activeDeckId = moodDeck.id;
+const tiredMood = M.recordMood(moodState, 'tired', '今天想慢一点', now);
+assert.equal(tiredMood.note, '今天想慢一点');
+assert.equal(M.dailyPlan(moodState, moodDeck, moodState.settings, now).recommended, 'light', '疲惫心情应自动推荐轻松任务');
+const moodCopy = M.validate(JSON.parse(JSON.stringify(moodState)));
+assert.equal(moodCopy.moodLog[M.day(now)].level, 'tired');
+M.recordMood(moodCopy, 'good', '现在好多了', now + 1000);
+const moodMerged = M.mergeStates(moodState, moodCopy);
+assert.equal(moodMerged.moodLog[M.day(now)].level, 'good', '多设备合并应保留较新的心情记录');
+
 M.see(deck, deck.words[0].id, state.settings, now);
 M.answer(deck, deck.words[0].id, false, state.settings, now);
 M.recordDailyAnswer(state, false, now);
@@ -59,4 +71,4 @@ assert.equal(rows[0].confidence, 'medium');
 assert.equal(rows[1].needsReview, true);
 assert.ok(rows[1].issues.includes('缺少中文意思'));
 
-console.log('Smart plans, rescue queue, calendar, merge, and import audit OK');
+console.log('Smart plans, mood pacing, rescue queue, calendar, merge, and import audit OK');
