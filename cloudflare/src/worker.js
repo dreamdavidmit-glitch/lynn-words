@@ -10,6 +10,7 @@ const SETUP_TOKEN_LIFETIME_SECONDS = 15 * 60;
 const RATE_WINDOW_SECONDS = 15 * 60;
 const RATE_BLOCK_SECONDS = 15 * 60;
 const RATE_MAX_FAILURES = 5;
+const MAX_MONITORED_SITES = 20;
 
 function bytesToBase64Url(bytes) {
   let binary = '';
@@ -67,7 +68,7 @@ function allowedOrigin(request, env) {
 }
 
 function headers(request, env, extra = {}) {
-  return {'Access-Control-Allow-Origin': allowedOrigin(request, env), 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Base-Revision, X-Device-Id, X-Payload-Encoding', 'Access-Control-Expose-Headers': 'X-Revision, X-Updated-At, X-Device-Id, X-Payload-Encoding', 'Access-Control-Max-Age': '86400', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', ...extra};
+  return {'Access-Control-Allow-Origin': allowedOrigin(request, env), 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Base-Revision, X-Device-Id, X-Payload-Encoding', 'Access-Control-Expose-Headers': 'X-Revision, X-Updated-At, X-Device-Id, X-Payload-Encoding', 'Access-Control-Max-Age': '86400', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', ...extra};
 }
 
 function json(request, env, data, status = 200) {
@@ -80,7 +81,7 @@ function blobValue(value) {
   return Uint8Array.from(value || []).buffer;
 }
 
-async function stateSummaryFromPayload(payload, encoding) {
+async function stateFromPayload(payload, encoding) {
   const bytes = blobValue(payload);
   let text;
   if (encoding === 'gzip') {
@@ -98,6 +99,11 @@ async function stateSummaryFromPayload(payload, encoding) {
   } else text = decoder.decode(bytes);
   const parsed = JSON.parse(text), state = parsed?.state;
   if (!state || !Array.isArray(state.decks)) throw new Error('快照中的学习记录无法读取。');
+  return state;
+}
+
+async function stateSummaryFromPayload(payload, encoding) {
+  const state = await stateFromPayload(payload, encoding);
   let words = 0, seen = 0, attempts = 0, remembered = 0;
   for (const deck of state.decks) {
     words += Array.isArray(deck.words) ? deck.words.length : 0;
@@ -115,6 +121,76 @@ async function stateSummaryFromPayload(payload, encoding) {
     while (known.has(cursor)) { streak++; const date = new Date(cursor + 'T12:00:00Z'); date.setUTCDate(date.getUTCDate() - 1); cursor = date.toISOString().slice(0, 10); }
   }
   return {decks: state.decks.length, words, seen, attempts, remembered, studyDays: studyDates.length, streak};
+}
+
+function overviewFromState(state, revision, updatedAt) {
+  const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
+  const studyDays = new Set(Array.isArray(state.studyDays) ? state.studyDays.filter(value => dayPattern.test(value)) : []);
+  const daily = new Map();
+  const ensureDay = date => {
+    if (!dayPattern.test(date)) return null;
+    if (!daily.has(date)) daily.set(date, {date, activeMinutes: 0, attempts: 0, correct: 0, wrong: 0, newWords: 0, remembered: 0, rescueDone: 0, studied: false});
+    return daily.get(date);
+  };
+  for (const date of studyDays) {
+    const item = ensureDay(date);
+    if (item) item.studied = true;
+  }
+  for (const [date, entry] of Object.entries(state.dailyLog || {})) {
+    const item = ensureDay(date);
+    if (!item || !entry || typeof entry !== 'object') continue;
+    item.activeMinutes = Math.max(0, Math.round((Number(entry.activeMs) || 0) / 60000));
+    item.attempts = Math.max(0, Number(entry.attempts) || 0);
+    item.correct = Math.max(0, Number(entry.correct) || 0);
+    item.wrong = Math.max(0, Number(entry.wrong) || 0);
+    item.rescueDone = Array.isArray(entry.rescueDone) ? Math.min(100, entry.rescueDone.length) : 0;
+    item.studied ||= item.activeMinutes > 0 || item.attempts > 0 || item.rescueDone > 0;
+  }
+
+  let words = 0, seen = 0, attempts = 0, remembered = 0;
+  const deckSummaries = [];
+  for (const deck of state.decks) {
+    const deckWords = Array.isArray(deck.words) ? deck.words.length : 0;
+    let deckSeen = 0, deckRemembered = 0;
+    words += deckWords;
+    for (const progress of Object.values(deck.progress || {})) {
+      if (!progress || typeof progress !== 'object') continue;
+      if (progress.seen) { seen++; deckSeen++; }
+      attempts += Math.max(0, Number(progress.attempts) || 0);
+      if ((Number(progress.longTermSuccesses) || 0) > 0) { remembered++; deckRemembered++; }
+      if (dayPattern.test(progress.firstSeenDate || '')) {
+        const item = ensureDay(progress.firstSeenDate);
+        if (item) { item.newWords++; item.studied = true; }
+      }
+      if (dayPattern.test(progress.lastLongTermSuccessDate || '')) {
+        const item = ensureDay(progress.lastLongTermSuccessDate);
+        if (item) { item.remembered++; item.studied = true; }
+      }
+    }
+    deckSummaries.push({title: String(deck.title || '未命名词本').slice(0, 80), words: deckWords, seen: deckSeen, remembered: deckRemembered, active: deck.id === state.activeDeckId});
+  }
+
+  const days = [...daily.values()].sort((left, right) => left.date.localeCompare(right.date)).slice(-70);
+  const latestStudyDate = [...days].reverse().find(item => item.studied)?.date || '';
+  return {
+    revision: Number(revision) || 0,
+    updatedAt: updatedAt || '',
+    totals: {decks: state.decks.length, words, seen, attempts, remembered, studyDays: studyDays.size},
+    latestStudyDate,
+    dailyPlan: state.dailyPlan && dayPattern.test(state.dailyPlan.date || '') ? {date: state.dailyPlan.date, mode: state.dailyPlan.mode || '', target: Math.max(0, Number(state.dailyPlan.target) || 0)} : null,
+    decks: deckSummaries.sort((left, right) => Number(right.active) - Number(left.active)).slice(0, 20),
+    days
+  };
+}
+
+function presenceFromRow(row, now = Date.now()) {
+  if (!row?.last_seen_at) return {state: 'offline', studying: false, lastSeenAt: ''};
+  const lastSeen = Date.parse(row.last_seen_at);
+  const age = Number.isFinite(lastSeen) ? Math.max(0, now - lastSeen) : Infinity;
+  let state = 'offline';
+  if (row.status !== 'offline' && age <= 130_000) state = row.status === 'away' || !Number(row.active) ? 'away' : 'online';
+  else if (row.status !== 'offline' && age <= 180_000) state = 'away';
+  return {state, studying: state === 'online' && !!Number(row.studying), lastSeenAt: row.last_seen_at};
 }
 
 async function bodyJSON(request) {
@@ -139,6 +215,18 @@ async function userAuthorized(request, env) {
 async function adminAuthorized(request, env) {
   const data = await verifyToken(env.SESSION_SECRET, bearer(request));
   return !!data && data.role === 'admin';
+}
+
+async function careAuthorized(request, env) {
+  const data = await verifyToken(env.SESSION_SECRET, bearer(request));
+  return !!data && (data.role === 'care' || data.role === 'admin');
+}
+
+async function validAdminPassword(password, env) {
+  if (!env.ADMIN_PASSWORD_HASH || !env.ADMIN_PASSWORD_SALT || !password || password.length > 128) return false;
+  const iterations = Number(env.ADMIN_PASSWORD_ITERATIONS) || ADMIN_PASSWORD_ITERATIONS;
+  const candidate = bytesToBase64Url(await passwordHash(password, base64UrlToBytes(env.ADMIN_PASSWORD_SALT), iterations));
+  return constantTimeEqual(candidate, env.ADMIN_PASSWORD_HASH);
 }
 
 async function requestFingerprint(request, env, scope) {
@@ -171,18 +259,126 @@ async function adminSession(request, env) {
   if (status.blocked) return json(request, env, {error: '尝试次数过多，请 15 分钟后再试。'}, 429);
   const body = await bodyJSON(request);
   const password = typeof body.password === 'string' ? body.password : '';
-  const iterations = Number(env.ADMIN_PASSWORD_ITERATIONS) || ADMIN_PASSWORD_ITERATIONS;
-  let valid = false;
-  if (password && password.length <= 128) {
-    const candidate = bytesToBase64Url(await passwordHash(password, base64UrlToBytes(env.ADMIN_PASSWORD_SALT), iterations));
-    valid = constantTimeEqual(candidate, env.ADMIN_PASSWORD_HASH);
-  }
+  const valid = await validAdminPassword(password, env);
   if (!valid) {
     await recordFailure(env, 'admin', status);
     return json(request, env, {error: '管理员密码不正确。'}, 401);
   }
   await clearFailures(env, 'admin', status.fingerprint);
   return json(request, env, {token: await issueToken(env.SESSION_SECRET, {role: 'admin'}, ADMIN_TOKEN_LIFETIME_SECONDS), expiresIn: ADMIN_TOKEN_LIFETIME_SECONDS});
+}
+
+async function careSession(request, env) {
+  const status = await rateStatus(request, env, 'care');
+  if (status.blocked) return json(request, env, {error: '尝试次数过多，请 15 分钟后再试。'}, 429);
+  const body = await bodyJSON(request), password = typeof body.password === 'string' ? body.password : '';
+  const row = await env.DB.prepare('SELECT salt, password_hash, iterations FROM care_auth WHERE id = 1').first();
+  let valid = false;
+  if (row && password && password.length <= 128) {
+    const candidate = bytesToBase64Url(await passwordHash(password, base64UrlToBytes(row.salt), row.iterations));
+    valid = constantTimeEqual(candidate, row.password_hash);
+  }
+  if (!valid) valid = await validAdminPassword(password, env);
+  if (!valid) {
+    await recordFailure(env, 'care', status);
+    return json(request, env, {error: row ? '进入密码不正确。' : '请先使用管理员密码进入并设置独立密码。'}, 401);
+  }
+  await clearFailures(env, 'care', status.fingerprint);
+  return json(request, env, {token: await issueToken(env.SESSION_SECRET, {role: 'care'}, ADMIN_TOKEN_LIFETIME_SECONDS), expiresIn: ADMIN_TOKEN_LIFETIME_SECONDS, usingAdminPassword: !row});
+}
+
+async function setCarePassword(request, env) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  const body = await bodyJSON(request), password = typeof body.password === 'string' ? body.password : '';
+  if (password.length < 8 || password.length > 128) return json(request, env, {error: '进入密码需要 8 到 128 个字符。'}, 400);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await passwordHash(password, salt);
+  const updatedAt = new Date().toISOString();
+  await env.DB.prepare(`INSERT INTO care_auth (id, salt, password_hash, iterations, updated_at) VALUES (1, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET salt = excluded.salt, password_hash = excluded.password_hash,
+      iterations = excluded.iterations, updated_at = excluded.updated_at`)
+    .bind(bytesToBase64Url(salt), bytesToBase64Url(hash), PASSWORD_ITERATIONS, updatedAt).run();
+  return json(request, env, {ok: true, token: await issueToken(env.SESSION_SECRET, {role: 'care'}, ADMIN_TOKEN_LIFETIME_SECONDS), updatedAt});
+}
+
+function safeSiteURL(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.length > 500) return null;
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === '::1' || host === '0.0.0.0') return null;
+    const parts = host.split('.').map(Number);
+    if (parts.length === 4 && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255)) {
+      if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0 || (parts[0] === 169 && parts[1] === 254) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127)) return null;
+    }
+    url.hash = '';
+    return url.href;
+  } catch (_) { return null; }
+}
+
+async function careSites(request, env) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  if (request.method === 'GET') {
+    const rows = await env.DB.prepare('SELECT id, name, url, created_at FROM monitored_sites ORDER BY id').all();
+    return json(request, env, {sites: (rows.results || []).map(row => ({id:Number(row.id), name:row.name, url:row.url, createdAt:row.created_at}))});
+  }
+  const body = await bodyJSON(request);
+  const name = String(body.name || '').trim().slice(0, 60), url = safeSiteURL(body.url);
+  if (!name || !url) return json(request, env, {error: '请填写名称和有效的公开网站地址。'}, 400);
+  const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM monitored_sites').first();
+  if (Number(count?.count) >= MAX_MONITORED_SITES) return json(request, env, {error: `最多可以添加 ${MAX_MONITORED_SITES} 个网站。`}, 400);
+  try {
+    const result = await env.DB.prepare('INSERT INTO monitored_sites (name, url, created_at) VALUES (?, ?, ?)').bind(name, url, new Date().toISOString()).run();
+    return json(request, env, {ok:true, id:Number(result.meta?.last_row_id) || 0, name, url}, 201);
+  } catch (_) { return json(request, env, {error:'这个网站已经在列表里了。'}, 409); }
+}
+
+async function removeCareSite(request, env, id) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error:'网站编号无效。'}, 400);
+  const result = await env.DB.prepare('DELETE FROM monitored_sites WHERE id = ?').bind(id).run();
+  return json(request, env, {ok:true, removed:Number(result.meta?.changes) || 0});
+}
+
+async function checkSite(row) {
+  const started = Date.now(), controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(row.url, {method:'GET', redirect:'follow', signal:controller.signal, headers:{Accept:'text/html,application/json;q=0.9,*/*;q=0.1'}});
+    response.body?.cancel().catch(() => {});
+    return {id:Number(row.id), name:row.name, url:row.url, ok:response.status < 500, status:response.status, latency:Date.now() - started, checkedAt:new Date().toISOString()};
+  } catch (error) {
+    return {id:Number(row.id), name:row.name, url:row.url, ok:false, status:0, latency:Date.now() - started, checkedAt:new Date().toISOString(), error:error?.name === 'AbortError' ? '检查超时' : '无法连接'};
+  } finally { clearTimeout(timeout); }
+}
+
+async function careSiteStatus(request, env) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  const rows = await env.DB.prepare('SELECT id, name, url FROM monitored_sites ORDER BY id LIMIT 20').all();
+  return json(request, env, {sites: await Promise.all((rows.results || []).map(checkSite))});
+}
+
+async function messageThread(request, env, role) {
+  const authorized = role === 'owner' ? await careAuthorized(request, env) : await userAuthorized(request, env);
+  if (!authorized) return json(request, env, {error: role === 'owner' ? '请重新验证进入密码。' : '请先连接云端进度。'}, 401);
+  const other = role === 'owner' ? 'lynn' : 'owner';
+  const url = new URL(request.url);
+  if (url.searchParams.get('read') === '1') {
+    await env.DB.prepare('UPDATE messages SET read_at = ? WHERE sender = ? AND read_at IS NULL').bind(new Date().toISOString(), other).run();
+  }
+  const rows = await env.DB.prepare('SELECT id, sender, body, created_at, read_at FROM messages ORDER BY id DESC LIMIT 100').all();
+  const messages = (rows.results || []).reverse().map(row => ({id:Number(row.id), sender:row.sender, body:row.body, createdAt:row.created_at, readAt:row.read_at || ''}));
+  return json(request, env, {messages, unread:messages.filter(message => message.sender === other && !message.readAt).length});
+}
+
+async function sendMessage(request, env, sender) {
+  const authorized = sender === 'owner' ? await careAuthorized(request, env) : await userAuthorized(request, env);
+  if (!authorized) return json(request, env, {error: sender === 'owner' ? '请重新验证进入密码。' : '请先连接云端进度。'}, 401);
+  const body = await bodyJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '';
+  if (!text || text.length > 500) return json(request, env, {error:'每条留言需要 1 到 500 个字符。'}, 400);
+  const createdAt = new Date().toISOString();
+  const result = await env.DB.prepare('INSERT INTO messages (sender, body, created_at, read_at) VALUES (?, ?, ?, NULL)').bind(sender, text, createdAt).run();
+  await env.DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 300)').run();
+  return json(request, env, {ok:true, message:{id:Number(result.meta?.last_row_id) || 0, sender, body:text, createdAt, readAt:''}}, 201);
 }
 
 async function claim(request, env) {
@@ -227,6 +423,33 @@ async function adminStatus(request, env) {
   if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
   const [auth, state, snapshots, generation] = await Promise.all([env.DB.prepare('SELECT COUNT(*) AS count FROM auth').first(), env.DB.prepare('SELECT COUNT(*) AS count FROM sync_state').first(), env.DB.prepare('SELECT COUNT(*) AS count FROM progress_snapshots').first(), currentGeneration(env)]);
   return json(request, env, {initialized: Number(auth?.count) > 0, hasProgress: Number(state?.count) > 0, snapshots: Number(snapshots?.count) || 0, generation});
+}
+
+async function adminOverview(request, env) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  const [row, presence] = await Promise.all([
+    env.DB.prepare('SELECT revision, updated_at, encoding, payload FROM sync_state WHERE id = 1').first(),
+    env.DB.prepare('SELECT status, studying, active, last_seen_at FROM presence WHERE id = 1').first()
+  ]);
+  if (!row) return json(request, env, {error: '云端还没有学习记录。'}, 404);
+  const state = await stateFromPayload(row.payload, row.encoding);
+  return json(request, env, {...overviewFromState(state, row.revision, row.updated_at), presence: presenceFromRow(presence)});
+}
+
+async function updatePresence(request, env) {
+  if (!await userAuthorized(request, env)) return json(request, env, {error: '请重新输入同步密码。'}, 401);
+  const body = await bodyJSON(request);
+  const status = ['online', 'away', 'offline'].includes(body.status) ? body.status : '';
+  if (!status) return json(request, env, {error: '在线状态无效。'}, 400);
+  const studying = status === 'online' && body.studying === true ? 1 : 0;
+  const active = status === 'online' && body.active === true ? 1 : 0;
+  const lastSeenAt = new Date().toISOString();
+  await env.DB.prepare(`INSERT INTO presence (id, status, studying, active, last_seen_at)
+    VALUES (1, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET status = excluded.status, studying = excluded.studying,
+      active = excluded.active, last_seen_at = excluded.last_seen_at`)
+    .bind(status, studying, active, lastSeenAt).run();
+  return json(request, env, {ok: true, presence: presenceFromRow({status, studying, active, last_seen_at: lastSeenAt})});
 }
 
 async function adminReset(request, env) {
@@ -342,7 +565,16 @@ export default {
     try {
       if (url.pathname === '/health' && request.method === 'GET') return json(request, env, {ok: true, service: 'lynn-words-sync'});
       if (url.pathname === '/admin/session' && request.method === 'POST') return await adminSession(request, env);
+      if (url.pathname === '/care/session' && request.method === 'POST') return await careSession(request, env);
+      if (url.pathname === '/care/password' && request.method === 'PUT') return await setCarePassword(request, env);
+      if (url.pathname === '/care/sites' && ['GET', 'POST'].includes(request.method)) return await careSites(request, env);
+      if (url.pathname === '/care/sites/status' && request.method === 'GET') return await careSiteStatus(request, env);
+      if (url.pathname === '/care/messages' && request.method === 'GET') return await messageThread(request, env, 'owner');
+      if (url.pathname === '/care/messages' && request.method === 'POST') return await sendMessage(request, env, 'owner');
+      const careSiteDelete = url.pathname.match(/^\/care\/sites\/(\d+)$/);
+      if (careSiteDelete && request.method === 'DELETE') return await removeCareSite(request, env, Number(careSiteDelete[1]));
       if (url.pathname === '/admin/status' && request.method === 'GET') return await adminStatus(request, env);
+      if (url.pathname === '/admin/overview' && request.method === 'GET') return await adminOverview(request, env);
       if (url.pathname === '/admin/reset' && request.method === 'POST') return await adminReset(request, env);
       if (url.pathname === '/admin/snapshots' && request.method === 'GET') return await adminSnapshots(request, env);
       const snapshotPreview = url.pathname.match(/^\/admin\/snapshots\/(\d+)\/preview$/);
@@ -350,6 +582,9 @@ export default {
       if (url.pathname === '/admin/snapshots/restore' && request.method === 'POST') return await adminRestoreSnapshot(request, env);
       if (url.pathname === '/claim' && request.method === 'POST') return await claim(request, env);
       if (url.pathname === '/session' && request.method === 'POST') return await login(request, env);
+      if (url.pathname === '/presence' && request.method === 'POST') return await updatePresence(request, env);
+      if (url.pathname === '/messages' && request.method === 'GET') return await messageThread(request, env, 'lynn');
+      if (url.pathname === '/messages' && request.method === 'POST') return await sendMessage(request, env, 'lynn');
       if (url.pathname === '/state' && request.method === 'GET') return await readState(request, env);
       if (url.pathname === '/state' && request.method === 'PUT') return await writeState(request, env);
       return json(request, env, {error: '接口不存在。'}, 404);

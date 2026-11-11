@@ -3,8 +3,8 @@
 // 词典分片和识别组件体积大、基本不变，用缓存优先。
 // 读音 mp3 不经过这里，交给浏览器自己处理（iPad Safari 播放音频需要分段请求）。
 // 如果以后改了 dictionary/ 或 vendor/ 里的文件，把下面的 VERSION 改一下即可清掉旧缓存。
-const VERSION = 'lynn-v23-20261104';
-const CORE = ['./', 'index.html', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'sync.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'festival.js', 'release.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
+const VERSION = 'lynn-v25-20261110';
+const CORE = ['./', 'index.html', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'sync.js', 'messages.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'festival.js', 'release.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(VERSION)
@@ -62,6 +62,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   const path = url.pathname;
+  if (/\/care(?:-[^/]+)?(?:\.html|\.css|\.js)?$/i.test(path)) return;
   if (/\/audio\/[^/]+\.mp3$/i.test(path) || /\/photo\.(?:jpe?g|png|webp)$/i.test(path) || /\/sw\.js$/.test(path)) return;
   if (/\/(?:dictionary|vendor)\//.test(path)) { event.respondWith(cacheFirst(request)); return; }
   event.respondWith(networkFirst(request));

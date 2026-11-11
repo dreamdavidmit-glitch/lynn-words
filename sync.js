@@ -10,7 +10,8 @@
   const CLAIM_PREFIX = '#sync-setup=';
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
-  let model, getState, applyState, notify, timer = 0, claimOpenTimer = 0, ready = false, busy = false, pendingRemote = null, adminMode = '', adminSnapshots = null, snapshotPreview = null;
+  let model, getState, applyState, getPresence, notify, timer = 0, presenceTimer = 0, claimOpenTimer = 0, ready = false, busy = false, pendingRemote = null, adminMode = '', adminSnapshots = null, snapshotPreview = null;
+  let lastInteractionAt = Date.now();
   let status = {kind: 'disconnected', text: '仅保存在本机'};
 
   const storage = {
@@ -106,6 +107,31 @@
   async function errorMessage(response) {
     try { const data = await response.json(); return data.error || `同步失败（${response.status}）`; }
     catch (_) { return `同步失败（${response.status}）`; }
+  }
+
+  async function reportPresence(statusOverride = '') {
+    if (!token() || !ready) return false;
+    const hidden = !!root.document?.hidden;
+    const status = statusOverride || (hidden ? 'away' : 'online');
+    const context = typeof getPresence === 'function' ? getPresence() || {} : {};
+    try {
+      const response = await api('/presence', {method: 'POST', keepalive: true, headers: {'Content-Type': 'application/json'}, body: JSON.stringify({status, studying: status === 'online' && !!context.studying, active: status === 'online' && Date.now() - lastInteractionAt < 120_000})});
+      return response.ok;
+    } catch (_) { return false; }
+  }
+
+  async function messages(markRead = false) {
+    if (!token()) throw new Error('先连接云端进度，才能收取留言。');
+    const response = await api(`/messages${markRead ? '?read=1' : ''}`);
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
+  async function reply(body) {
+    if (!token()) throw new Error('先连接云端进度，才能回复留言。');
+    const response = await api('/messages', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({body})});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
   }
 
   async function readRemote() {
@@ -302,18 +328,18 @@
     currentState = state; renderBadge();
     if (claimTokenFromURL()) { setStatus('disconnected', '完成首次云端设置'); return state; }
     if (!token()) { setStatus('disconnected', '仅保存在本机'); return state; }
-    try { const next = await reconcile(state); return next; }
+    try { const next = await reconcile(state); reportPresence(); return next; }
     catch (error) { const signedOut = !token(); setStatus(signedOut ? 'disconnected' : navigator.onLine ? 'error' : 'offline', signedOut ? '请重新连接云端' : navigator.onLine ? '云端暂时不可用' : '离线中，本机已保存', error.message); return state; }
   }
 
   function init(options) {
-    model = options.model; getState = options.getState; applyState = options.applyState; notify = options.notify || (() => {});
+    model = options.model; getState = options.getState; applyState = options.applyState; getPresence = options.getPresence; notify = options.notify || (() => {});
     root.document.addEventListener('click', event => {
       const openButton = event.target.closest('[data-sync-open]'); if (openButton) { open(); return; }
       const button = event.target.closest('[data-sync-action]'); if (!button) return;
       const action = button.dataset.syncAction;
       if (action === 'close') { adminMode = ''; adminSnapshots = null; snapshotPreview = null; session.remove(ADMIN_TOKEN_KEY); close(); }
-      else if (action === 'disconnect') { storage.remove(TOKEN_KEY); storage.remove(META_KEY); session.remove(ADMIN_TOKEN_KEY); session.remove(SETUP_TOKEN_KEY); ready = false; pendingRemote = null; close(); setStatus('disconnected', '仅保存在本机'); notify('这台设备已断开云端，本地进度还在。'); }
+      else if (action === 'disconnect') { reportPresence('offline'); storage.remove(TOKEN_KEY); storage.remove(META_KEY); session.remove(ADMIN_TOKEN_KEY); session.remove(SETUP_TOKEN_KEY); ready = false; pendingRemote = null; close(); setStatus('disconnected', '仅保存在本机'); notify('这台设备已断开云端，本地进度还在。'); }
       else if (action === 'admin-reset-open') { adminMode = 'reset'; session.remove(ADMIN_TOKEN_KEY); open(); }
       else if (action === 'admin-history-open') { adminMode = 'history'; adminSnapshots = null; snapshotPreview = null; session.remove(ADMIN_TOKEN_KEY); open(); }
       else if (action === 'admin-preview-snapshot') {
@@ -353,13 +379,20 @@
         }
         close(); const next = await reconcile(getState(), mode !== 'claim');
         if (next !== getState()) await applyState(next);
+        reportPresence('online');
         notify(mode === 'claim' ? '云端同步已经开启 ✓' : '云端进度连接成功 ✓');
       }).catch(error => { notify(error.message); submit.disabled = false; submit.textContent = mode === 'claim' ? '保存密码并同步这台设备的进度' : '连接并读取进度'; });
     });
-    root.addEventListener('online', () => schedule(getState(), true));
+    root.addEventListener('online', () => { schedule(getState(), true); reportPresence('online'); });
     root.addEventListener('offline', () => setStatus('offline', '离线中，本机已保存'));
-    root.document.addEventListener('visibilitychange', () => { if (root.document.hidden && token() && ready) push(getState(), meta().revision || 0); });
+    for (const eventName of ['pointerdown', 'keydown', 'touchstart']) root.document.addEventListener(eventName, () => { lastInteractionAt = Date.now(); }, {passive: true});
+    root.document.addEventListener('visibilitychange', () => {
+      if (root.document.hidden && token() && ready) { reportPresence('away'); push(getState(), meta().revision || 0); }
+      else { lastInteractionAt = Date.now(); reportPresence('online'); }
+    });
+    root.addEventListener('pagehide', () => reportPresence('offline'));
+    clearInterval(presenceTimer); presenceTimer = root.setInterval(() => { if (!root.document.hidden) reportPresence('online'); }, 55_000);
   }
 
-  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, status: () => ({...status})};
+  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, messages, reply, connected: () => !!token(), status: () => ({...status})};
 })(typeof window !== 'undefined' ? window : globalThis);
