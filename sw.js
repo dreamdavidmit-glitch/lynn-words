@@ -3,7 +3,7 @@
 // 词典分片和识别组件体积大、基本不变，用缓存优先。
 // 读音 mp3 不经过这里，交给浏览器自己处理（iPad Safari 播放音频需要分段请求）。
 // 如果以后改了 dictionary/ 或 vendor/ 里的文件，把下面的 VERSION 改一下即可清掉旧缓存。
-const VERSION = 'lynn-v26-20261111';
+const VERSION = 'lynn-v27-20261112-required-sync-login';
 const CORE = ['./', 'index.html', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'sync.js', 'messages.js', 'companion.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'festival.js', 'release.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
 
 self.addEventListener('install', event => {

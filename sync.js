@@ -2,7 +2,7 @@
   'use strict';
 
   const ENDPOINT = 'https://lynn-words-sync.lynn-words-work.workers.dev';
-  const TOKEN_KEY = 'lynn:syncToken';
+  const LEGACY_TOKEN_KEY = 'lynn:syncToken';
   const META_KEY = 'lynn:syncMeta';
   const DEVICE_KEY = 'lynn:syncDevice';
   const ADMIN_TOKEN_KEY = 'lynn:adminToken';
@@ -11,6 +11,7 @@
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let model, getState, applyState, getPresence, notify, timer = 0, presenceTimer = 0, claimOpenTimer = 0, ready = false, busy = false, pendingRemote = null, adminMode = '', adminSnapshots = null, snapshotPreview = null;
+  let accessToken = '', accessRequired = false, accessResolve = null;
   let lastInteractionAt = Date.now();
   let status = {kind: 'disconnected', text: '仅保存在本机'};
 
@@ -24,7 +25,7 @@
     set(key, value) { try { root.sessionStorage?.setItem(key, value); } catch (_) {} },
     remove(key) { try { root.sessionStorage?.removeItem(key); } catch (_) {} }
   };
-  const token = () => storage.get(TOKEN_KEY);
+  const token = () => accessToken;
   const adminToken = () => session.get(ADMIN_TOKEN_KEY);
   const setupToken = () => session.get(SETUP_TOKEN_KEY);
   const meta = () => { try { return JSON.parse(storage.get(META_KEY)) || {}; } catch (_) { return {}; } };
@@ -100,7 +101,9 @@
     if (tokenOverride) headers.set('Authorization', `Bearer ${tokenOverride}`);
     else if (auth && token()) headers.set('Authorization', `Bearer ${token()}`);
     const response = await fetch(ENDPOINT + path, {...fetchOptions, headers});
-    if (response.status === 401 && auth && !tokenOverride) { storage.remove(TOKEN_KEY); ready = false; setStatus('disconnected', '请重新连接云端'); }
+    if (response.status === 401 && auth && !tokenOverride) {
+      accessToken = ''; ready = false; accessRequired = true; setStatus('disconnected', '请输入同步密码'); open();
+    }
     return response;
   }
 
@@ -261,7 +264,7 @@
     const authorization = claiming ? (setupToken() || adminToken()) : '';
     const response = await api(path, {method: 'POST', auth: !claiming, tokenOverride: authorization, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(claiming ? {password, claimToken} : {password})});
     if (!response.ok) throw new Error(await errorMessage(response));
-    const result = await response.json(); storage.set(TOKEN_KEY, result.token); ready = true;
+    const result = await response.json(); accessToken = result.token; ready = true;
     return result;
   }
 
@@ -277,7 +280,7 @@
     const result = await response.json();
     session.set(SETUP_TOKEN_KEY, result.setupToken);
     session.remove(ADMIN_TOKEN_KEY);
-    storage.remove(TOKEN_KEY); storage.remove(META_KEY);
+    accessToken = ''; storage.remove(LEGACY_TOKEN_KEY); storage.remove(META_KEY);
     ready = false; pendingRemote = null; adminMode = '';
     return result;
   }
@@ -328,7 +331,7 @@
       const resetting = !!setupToken();
       return `<form class="sync-dialog" data-sync-form="claim" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button type="button" class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">☁️</div><span class="tag">${resetting ? '重新设置' : '第二步 · Lynn 设置'}</span><h2 id="sync-title">${resetting ? '设置新的同步密码' : '开启 Lynn 的云端进度'}</h2><p>请由 Lynn 设置一个至少 8 位的同步密码。以后换设备时，用它就能接着学习。</p><label class="field">设置同步密码<input name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label><label class="field">再输入一次<input name="confirm" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label><button class="btn" type="submit">保存密码并同步这台设备的进度</button><small>管理员验证已经通过；两个密码彼此独立。</small></form>`;
     }
-    if (!token()) return `<form class="sync-dialog" data-sync-form="login" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button type="button" class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">☁️</div><h2 id="sync-title">连接 Lynn 的云端进度</h2><p>在新手机、iPad 或电脑上输入同步密码，就能读取上次学习的位置。</p><label class="field">同步密码<input name="password" type="password" minlength="8" maxlength="128" autocomplete="current-password" required></label><button class="btn" type="submit">连接并读取进度</button><button class="sync-admin-link" type="button" data-sync-action="admin-history-open">管理员恢复历史进度</button><button class="sync-admin-link" type="button" data-sync-action="admin-reset-open">管理员重置同步密码</button><small>本机进度会先保留，不会在登录前被覆盖。</small></form>`;
+    if (!token()) return `<form class="sync-dialog sync-required" data-sync-form="login" role="dialog" aria-modal="true" aria-labelledby="sync-title">${accessRequired ? '' : '<button type="button" class="sync-close" data-sync-action="close" aria-label="关闭">×</button>'}<div class="sync-cloud">🔒</div><span class="tag">进入 Lynn 的小词窝</span><h2 id="sync-title">先输入同步密码</h2><p>密码验证成功后，才会打开学习页面并读取上次的学习进度。</p><label class="field">同步密码<input name="password" type="password" minlength="8" maxlength="128" autocomplete="current-password" required autofocus></label><button class="btn" type="submit">验证密码并进入</button><button class="sync-admin-link" type="button" data-sync-action="admin-history-open">管理员恢复历史进度</button><button class="sync-admin-link" type="button" data-sync-action="admin-reset-open">管理员重置同步密码</button><small>为了保护 Lynn 的进度，每次重新打开网站都要验证；密码不会保存在这台设备上。</small></form>`;
     const old = meta();
     return `<div class="sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-title"><button class="sync-close" data-sync-action="close" aria-label="关闭">×</button><div class="sync-cloud">${status.kind === 'synced' ? '☁️✓' : '☁️'}</div><h2 id="sync-title">云端进度已连接</h2><p>${escapeHTML(status.text)}${old.revision ? ` · 云端版本 ${old.revision}` : ''}</p><div class="sync-choice"><button class="btn" data-sync-action="sync-now">立即同步</button><button class="btn secondary" data-sync-action="restore">从云端恢复</button></div><button class="sync-admin-link" data-sync-action="admin-history-open">管理员恢复最近 7 次进度</button><button class="sync-admin-link" data-sync-action="admin-reset-open">管理员重置同步密码</button><button class="sync-disconnect" data-sync-action="disconnect">断开这台设备</button><small>本地记录始终保留；断网时会等网络恢复后再上传。</small></div>`;
   }
@@ -364,11 +367,11 @@
 
   let currentState = null;
   async function bootstrap(state) {
-    currentState = state; renderBadge();
-    if (claimTokenFromURL()) { setStatus('disconnected', '完成首次云端设置'); return state; }
-    if (!token()) { setStatus('disconnected', '仅保存在本机'); return state; }
-    try { const next = await reconcile(state); reportPresence(); return next; }
-    catch (error) { const signedOut = !token(); setStatus(signedOut ? 'disconnected' : navigator.onLine ? 'error' : 'offline', signedOut ? '请重新连接云端' : navigator.onLine ? '云端暂时不可用' : '离线中，本机已保存', error.message); return state; }
+    currentState = state; accessToken = ''; storage.remove(LEGACY_TOKEN_KEY); renderBadge();
+    accessRequired = true;
+    setStatus('disconnected', claimTokenFromURL() ? '完成首次云端设置' : '请输入同步密码');
+    open();
+    return new Promise(resolve => { accessResolve = resolve; });
   }
 
   function init(options) {
@@ -377,8 +380,8 @@
       const openButton = event.target.closest('[data-sync-open]'); if (openButton) { open(); return; }
       const button = event.target.closest('[data-sync-action]'); if (!button) return;
       const action = button.dataset.syncAction;
-      if (action === 'close') { adminMode = ''; adminSnapshots = null; snapshotPreview = null; session.remove(ADMIN_TOKEN_KEY); close(); }
-      else if (action === 'disconnect') { reportPresence('offline'); storage.remove(TOKEN_KEY); storage.remove(META_KEY); session.remove(ADMIN_TOKEN_KEY); session.remove(SETUP_TOKEN_KEY); ready = false; pendingRemote = null; close(); setStatus('disconnected', '仅保存在本机'); notify('这台设备已断开云端，本地进度还在。'); }
+      if (action === 'close') { adminMode = ''; adminSnapshots = null; snapshotPreview = null; session.remove(ADMIN_TOKEN_KEY); if (accessRequired) open(); else close(); }
+      else if (action === 'disconnect') { reportPresence('offline'); accessToken = ''; storage.remove(LEGACY_TOKEN_KEY); storage.remove(META_KEY); session.remove(ADMIN_TOKEN_KEY); session.remove(SETUP_TOKEN_KEY); ready = false; pendingRemote = null; accessRequired = true; setStatus('disconnected', '请输入同步密码'); open(); notify('这台设备已断开云端，请输入同步密码后重新进入。'); }
       else if (action === 'admin-reset-open') { adminMode = 'reset'; session.remove(ADMIN_TOKEN_KEY); open(); }
       else if (action === 'admin-history-open') { adminMode = 'history'; adminSnapshots = null; snapshotPreview = null; session.remove(ADMIN_TOKEN_KEY); open(); }
       else if (action === 'admin-preview-snapshot') {
@@ -390,7 +393,7 @@
         if (!snapshotPreview || snapshotPreview.id !== id) { notify('请先预览这份记录。'); return; }
         if (!confirm('确定把云端学习进度恢复到这一份吗？当前进度也已经在最近快照里，可以再次恢复。')) return;
         button.disabled = true; button.textContent = '正在恢复…';
-        restoreAdminSnapshot(id).then(() => { close(); adminMode = ''; session.remove(ADMIN_TOKEN_KEY); notify('云端进度已经恢复，当前设备也已更新 ✓'); }).catch(error => { notify(error.message); adminSnapshots = null; loadAdminSnapshots().then(open).catch(() => { session.remove(ADMIN_TOKEN_KEY); open(); }); });
+        restoreAdminSnapshot(id).then(() => { adminMode = ''; session.remove(ADMIN_TOKEN_KEY); const locked = accessRequired; if (locked) open(); else close(); notify(locked ? '云端进度已经恢复，请输入同步密码后进入 ✓' : '云端进度已经恢复，当前设备也已更新 ✓'); }).catch(error => { notify(error.message); adminSnapshots = null; loadAdminSnapshots().then(open).catch(() => { session.remove(ADMIN_TOKEN_KEY); open(); }); });
       }
       else if (action === 'admin-reset-confirm') {
         button.disabled = true; button.textContent = '正在安全重置…';
@@ -416,11 +419,18 @@
           session.remove(ADMIN_TOKEN_KEY); session.remove(SETUP_TOKEN_KEY);
           if (claimTokenFromURL()) root.history.replaceState(null, '', root.location.pathname + root.location.search);
         }
-        close(); const next = await reconcile(getState(), mode !== 'claim');
-        if (next !== getState()) await applyState(next);
+        const next = await reconcile(getState(), mode !== 'claim');
+        if (accessResolve) {
+          const resolve = accessResolve; accessResolve = null; accessRequired = false;
+          if (!pendingRemote) close();
+          resolve(next);
+        } else {
+          accessRequired = false; close();
+          if (next !== getState()) await applyState(next);
+        }
         reportPresence('online');
-        notify(mode === 'claim' ? '云端同步已经开启 ✓' : '云端进度连接成功 ✓');
-      }).catch(error => { notify(error.message); submit.disabled = false; submit.textContent = mode === 'claim' ? '保存密码并同步这台设备的进度' : '连接并读取进度'; });
+        notify(mode === 'claim' ? '云端同步已经开启 ✓' : '密码正确，欢迎回来 ✓');
+      }).catch(error => { notify(error.message); submit.disabled = false; submit.textContent = mode === 'claim' ? '保存密码并同步这台设备的进度' : '验证密码并进入'; });
     });
     root.addEventListener('online', () => { schedule(getState(), true); reportPresence('online'); });
     root.addEventListener('offline', () => setStatus('offline', '离线中，本机已保存'));
