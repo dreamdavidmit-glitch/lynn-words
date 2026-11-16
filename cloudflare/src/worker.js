@@ -2,15 +2,17 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const MAX_PAYLOAD = 1_900_000;
 const MAX_DECOMPRESSED_PAYLOAD = 24_000_000;
-const PASSWORD_ITERATIONS = 100_000;
-const ADMIN_PASSWORD_ITERATIONS = 100_000;
-const USER_TOKEN_LIFETIME_SECONDS = 180 * 24 * 60 * 60;
-const ADMIN_TOKEN_LIFETIME_SECONDS = 30 * 60;
+const PASSWORD_ITERATIONS = 600_000;
+const ADMIN_PASSWORD_ITERATIONS = 600_000;
+const USER_TOKEN_LIFETIME_SECONDS = 12 * 60 * 60;
+const ADMIN_TOKEN_LIFETIME_SECONDS = 15 * 60;
+const CARE_TOKEN_LIFETIME_SECONDS = 30 * 60;
+const FRESH_ADMIN_SECONDS = 5 * 60;
 const SETUP_TOKEN_LIFETIME_SECONDS = 15 * 60;
 const RATE_WINDOW_SECONDS = 15 * 60;
-const RATE_BLOCK_SECONDS = 15 * 60;
 const RATE_MAX_FAILURES = 5;
-const MAX_MONITORED_SITES = 20;
+const RATE_BLOCK_STEPS = [5 * 60, 15 * 60, 60 * 60, 5 * 60 * 60];
+const MAX_MONITORED_SITES = 10;
 const MAX_ROOM_PHOTO = 1_500_000;
 
 function bytesToBase64Url(bytes) {
@@ -35,9 +37,21 @@ function constantTimeEqual(left, right) {
 }
 
 async function passwordHash(password, salt, iterations = PASSWORD_ITERATIONS) {
-  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-256', salt, iterations}, key, 256);
-  return new Uint8Array(bits);
+  let material = encoder.encode(password), remaining = Math.max(1, Number(iterations) || PASSWORD_ITERATIONS), round = 0;
+  while (remaining > 0) {
+    const count = Math.min(100_000, remaining);
+    const roundSalt = round === 0 ? salt : (() => {
+      const combined = new Uint8Array(salt.length + 4);
+      combined.set(salt);
+      new DataView(combined.buffer).setUint32(salt.length, round);
+      return combined;
+    })();
+    const key = await crypto.subtle.importKey('raw', material, 'PBKDF2', false, ['deriveBits']);
+    material = new Uint8Array(await crypto.subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-256', salt: roundSalt, iterations: count}, key, 256));
+    remaining -= count;
+    round++;
+  }
+  return material;
 }
 
 async function hmac(secret, message) {
@@ -267,9 +281,10 @@ async function userAuthorized(request, env) {
   return !!data && data.role === 'user' && Number(data.generation) === await currentGeneration(env);
 }
 
-async function adminAuthorized(request, env) {
+async function adminAuthorized(request, env, maxAgeSeconds = ADMIN_TOKEN_LIFETIME_SECONDS) {
   const data = await verifyToken(env.SESSION_SECRET, bearer(request));
-  return !!data && data.role === 'admin';
+  const now = Math.floor(Date.now() / 1000);
+  return !!data && data.role === 'admin' && Number.isSafeInteger(data.iat) && data.iat <= now && now - data.iat <= maxAgeSeconds;
 }
 
 async function careAuthorized(request, env) {
@@ -284,68 +299,96 @@ async function validAdminPassword(password, env) {
   return constantTimeEqual(candidate, env.ADMIN_PASSWORD_HASH);
 }
 
-async function requestFingerprint(request, env, scope) {
+async function requestFingerprint(request, env, scope, credential = '') {
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-  return bytesToBase64Url(await hmac(env.SESSION_SECRET, `${scope}:${ip}`)).slice(0, 32);
+  return bytesToBase64Url(await hmac(env.SESSION_SECRET, `${scope}:${ip}:${credential}`)).slice(0, 32);
 }
 
-async function rateStatus(request, env, scope) {
-  const fingerprint = await requestFingerprint(request, env, scope);
+async function rateStatus(request, env, scope, credential = '') {
+  const fingerprint = await requestFingerprint(request, env, scope, credential);
   const row = await env.DB.prepare('SELECT failures, window_started, blocked_until FROM auth_attempts WHERE scope = ? AND fingerprint = ?').bind(scope, fingerprint).first();
   const now = Math.floor(Date.now() / 1000);
   return {fingerprint, now, blocked: Number(row?.blocked_until || 0) > now, row};
+}
+
+async function rateStatuses(request, env, scope, password) {
+  const credential = bytesToBase64Url(await hmac(env.SESSION_SECRET, String(password || ''))).slice(0, 20);
+  return Promise.all([
+    rateStatus(request, env, `${scope}:ip`),
+    rateStatus(request, env, `${scope}:credential`, credential)
+  ]);
 }
 
 async function recordFailure(env, scope, status) {
   const withinWindow = status.row && status.now - Number(status.row.window_started) < RATE_WINDOW_SECONDS;
   const failures = withinWindow ? Number(status.row.failures) + 1 : 1;
   const windowStarted = withinWindow ? Number(status.row.window_started) : status.now;
-  const blockedUntil = failures >= RATE_MAX_FAILURES ? status.now + RATE_BLOCK_SECONDS : 0;
+  const step = Math.max(0, Math.min(RATE_BLOCK_STEPS.length - 1, Math.floor((failures - RATE_MAX_FAILURES) / 3)));
+  const blockedUntil = failures >= RATE_MAX_FAILURES ? status.now + RATE_BLOCK_STEPS[step] : 0;
   await env.DB.prepare(`INSERT INTO auth_attempts (scope, fingerprint, failures, window_started, blocked_until) VALUES (?, ?, ?, ?, ?) ON CONFLICT(scope, fingerprint) DO UPDATE SET failures = excluded.failures, window_started = excluded.window_started, blocked_until = excluded.blocked_until`).bind(scope, status.fingerprint, failures, windowStarted, blockedUntil).run();
+  return {failures, blockedUntil, now: status.now};
 }
 
 async function clearFailures(env, scope, fingerprint) {
   await env.DB.prepare('DELETE FROM auth_attempts WHERE scope = ? AND fingerprint = ?').bind(scope, fingerprint).run();
 }
 
+async function failedLogin(request, env, scope, statuses, error) {
+  const recorded = await Promise.all(statuses.map((status, index) => recordFailure(env, `${scope}:${index ? 'credential' : 'ip'}`, status)));
+  const blockedUntil = Math.max(...recorded.map(item => item.blockedUntil || 0));
+  if (blockedUntil > recorded[0].now) {
+    const minutes = Math.max(1, Math.ceil((blockedUntil - recorded[0].now) / 60));
+    return json(request, env, {error: `错误尝试较多，请 ${minutes} 分钟后再试；正确密码仍可直接进入。`}, 429);
+  }
+  return json(request, env, {error}, 401);
+}
+
+async function clearLoginFailures(env, scope, statuses) {
+  await Promise.all(statuses.map((status, index) => clearFailures(env, `${scope}:${index ? 'credential' : 'ip'}`, status.fingerprint)));
+}
+
+function strongCarePassword(password) {
+  const groups = [/[a-z]/.test(password), /[A-Z]/.test(password), /\d/.test(password), /[^A-Za-z\d]/.test(password)].filter(Boolean).length;
+  return password.length >= 12 && password.length <= 128 && groups >= 3;
+}
+
 async function adminSession(request, env) {
   if (!env.ADMIN_PASSWORD_HASH || !env.ADMIN_PASSWORD_SALT) return json(request, env, {error: '管理员认证尚未配置。'}, 503);
-  const status = await rateStatus(request, env, 'admin');
-  if (status.blocked) return json(request, env, {error: '尝试次数过多，请 15 分钟后再试。'}, 429);
   const body = await bodyJSON(request);
   const password = typeof body.password === 'string' ? body.password : '';
+  const statuses = await rateStatuses(request, env, 'admin', password);
   const valid = await validAdminPassword(password, env);
-  if (!valid) {
-    await recordFailure(env, 'admin', status);
-    return json(request, env, {error: '管理员密码不正确。'}, 401);
-  }
-  await clearFailures(env, 'admin', status.fingerprint);
+  if (!valid) return failedLogin(request, env, 'admin', statuses, '管理员密码不正确。');
+  await clearLoginFailures(env, 'admin', statuses);
   return json(request, env, {token: await issueToken(env.SESSION_SECRET, {role: 'admin'}, ADMIN_TOKEN_LIFETIME_SECONDS), expiresIn: ADMIN_TOKEN_LIFETIME_SECONDS});
 }
 
 async function careSession(request, env) {
-  const status = await rateStatus(request, env, 'care');
-  if (status.blocked) return json(request, env, {error: '尝试次数过多，请 15 分钟后再试。'}, 429);
   const body = await bodyJSON(request), password = typeof body.password === 'string' ? body.password : '';
+  const statuses = await rateStatuses(request, env, 'care', password);
   const row = await env.DB.prepare('SELECT salt, password_hash, iterations FROM care_auth WHERE id = 1').first();
   let valid = false;
   if (row && password && password.length <= 128) {
     const candidate = bytesToBase64Url(await passwordHash(password, base64UrlToBytes(row.salt), row.iterations));
     valid = constantTimeEqual(candidate, row.password_hash);
   }
-  if (!valid) valid = await validAdminPassword(password, env);
-  if (!valid) {
-    await recordFailure(env, 'care', status);
-    return json(request, env, {error: row ? '进入密码不正确。' : '请先使用管理员密码进入并设置独立密码。'}, 401);
+  if (!row && !valid) valid = await validAdminPassword(password, env);
+  if (!valid) return failedLogin(request, env, 'care', statuses, row ? '进入密码不正确。' : '请先使用管理员密码进入并设置独立密码。');
+  await clearLoginFailures(env, 'care', statuses);
+  if (row && Number(row.iterations) < PASSWORD_ITERATIONS) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const hash = await passwordHash(password, salt);
+    await env.DB.prepare('UPDATE care_auth SET salt = ?, password_hash = ?, iterations = ?, updated_at = ? WHERE id = 1')
+      .bind(bytesToBase64Url(salt), bytesToBase64Url(hash), PASSWORD_ITERATIONS, new Date().toISOString()).run();
   }
-  await clearFailures(env, 'care', status.fingerprint);
-  return json(request, env, {token: await issueToken(env.SESSION_SECRET, {role: 'care'}, ADMIN_TOKEN_LIFETIME_SECONDS), expiresIn: ADMIN_TOKEN_LIFETIME_SECONDS, usingAdminPassword: !row});
+  return json(request, env, {token: await issueToken(env.SESSION_SECRET, {role: 'care'}, CARE_TOKEN_LIFETIME_SECONDS), expiresIn: CARE_TOKEN_LIFETIME_SECONDS, usingAdminPassword: !row});
 }
 
 async function setCarePassword(request, env) {
   if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
   const body = await bodyJSON(request), password = typeof body.password === 'string' ? body.password : '';
-  if (password.length < 8 || password.length > 128) return json(request, env, {error: '进入密码需要 8 到 128 个字符。'}, 400);
+  if (!strongCarePassword(password)) return json(request, env, {error: '进入密码至少 12 位，并需要包含大小写字母、数字、符号中的至少三类。'}, 400);
+  if (await validAdminPassword(password, env)) return json(request, env, {error: '陪伴端密码不能与管理员密码相同。'}, 400);
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const hash = await passwordHash(password, salt);
   const updatedAt = new Date().toISOString();
@@ -353,19 +396,97 @@ async function setCarePassword(request, env) {
     ON CONFLICT(id) DO UPDATE SET salt = excluded.salt, password_hash = excluded.password_hash,
       iterations = excluded.iterations, updated_at = excluded.updated_at`)
     .bind(bytesToBase64Url(salt), bytesToBase64Url(hash), PASSWORD_ITERATIONS, updatedAt).run();
-  return json(request, env, {ok: true, token: await issueToken(env.SESSION_SECRET, {role: 'care'}, ADMIN_TOKEN_LIFETIME_SECONDS), updatedAt});
+  return json(request, env, {ok: true, token: await issueToken(env.SESSION_SECRET, {role: 'care'}, CARE_TOKEN_LIFETIME_SECONDS), updatedAt});
 }
 
-function safeSiteURL(value) {
+function publicIPv4(host) {
+  const parts = host.split('.').map(Number);
+  if (parts.length !== 4 || !parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255)) return null;
+  const [a, b, c] = parts;
+  if (a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 0 && c === 0) ||
+      (a === 192 && b === 0 && c === 2) || (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19 || b === 51)) ||
+      (a === 203 && b === 0 && c === 113)) return false;
+  return true;
+}
+
+function ipv6Value(host) {
+  let value = host.toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+  if (!value.includes(':') || !/^[0-9a-f:.]+$/.test(value) || (value.match(/::/g) || []).length > 1) return null;
+  if (value.includes('.')) {
+    const tail = value.slice(value.lastIndexOf(':') + 1), publicTail = publicIPv4(tail);
+    if (publicTail === null) return null;
+    const parts = tail.split('.').map(Number);
+    value = `${value.slice(0, value.lastIndexOf(':'))}:${((parts[0] << 8) | parts[1]).toString(16)}:${((parts[2] << 8) | parts[3]).toString(16)}`;
+  }
+  const halves = value.split('::'), left = halves[0] ? halves[0].split(':') : [], right = halves[1] ? halves[1].split(':') : [];
+  if (halves.length === 1 && left.length !== 8 || halves.length === 2 && left.length + right.length >= 8) return null;
+  const groups = halves.length === 2 ? [...left, ...Array(8 - left.length - right.length).fill('0'), ...right] : left;
+  if (groups.length !== 8 || groups.some(group => !/^[0-9a-f]{1,4}$/.test(group))) return null;
+  return groups.reduce((result, group) => result << 16n | BigInt(`0x${group}`), 0n);
+}
+
+function ipv6Prefix(value, network, bits) {
+  const shift = BigInt(128 - bits);
+  return value >> shift === ipv6Value(network) >> shift;
+}
+
+function publicIPv6(host) {
+  const value = ipv6Value(host);
+  if (value === null) return null;
+  if (value <= 1n || ipv6Prefix(value, '::', 96) || ipv6Prefix(value, '::ffff:0:0', 96) ||
+      ipv6Prefix(value, '64:ff9b::', 96) || ipv6Prefix(value, '100::', 64) ||
+      ipv6Prefix(value, 'fc00::', 7) || ipv6Prefix(value, 'fe80::', 10) || ipv6Prefix(value, 'ff00::', 8) ||
+      ipv6Prefix(value, '2001::', 32) || ipv6Prefix(value, '2001:2::', 48) ||
+      ipv6Prefix(value, '2001:10::', 28) || ipv6Prefix(value, '2001:20::', 28) ||
+      ipv6Prefix(value, '2001:db8::', 32) || ipv6Prefix(value, '2002::', 16)) return false;
+  return true;
+}
+
+function publicAddress(host) {
+  const ipv4 = publicIPv4(host);
+  if (ipv4 !== null) return ipv4;
+  const ipv6 = publicIPv6(host);
+  return ipv6 === null ? null : ipv6;
+}
+
+async function budgetedFetch(input, init, budget) {
+  if (budget && budget.remaining <= 0) throw new Error('Subrequest budget exhausted');
+  if (budget) budget.remaining--;
+  return fetch(input, init);
+}
+
+async function publicDNSHost(host, context = {}) {
+  const direct = publicAddress(host);
+  if (direct !== null) return direct;
+  const blockedSuffixes = ['.localhost', '.local', '.internal', '.lan', '.home', '.home.arpa', '.test', '.example', '.invalid', '.nip.io', '.sslip.io'];
+  if (!host || host === 'localhost' || blockedSuffixes.some(suffix => host.endsWith(suffix)) || host === 'localtest.me' || host.endsWith('.localtest.me')) return false;
+  if (context.dns?.has(host)) return context.dns.get(host);
+  const lookup = (async () => {
+  try {
+    const lookups = await Promise.all([1, 28].map(async type => {
+      const endpoint = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${type}`;
+      const response = await budgetedFetch(endpoint, {headers:{Accept:'application/dns-json'}, redirect:'manual'}, context.budget);
+      if (!response.ok) throw new Error('DNS lookup failed');
+      const data = await response.json();
+      return (data.Answer || []).filter(answer => Number(answer.type) === type).map(answer => String(answer.data || '').replace(/^\[|\]$/g, ''));
+    }));
+    const addresses = lookups.flat();
+    return addresses.length > 0 && addresses.every(address => publicAddress(address) === true);
+  } catch (_) { return false; }
+  })();
+  context.dns?.set(host, lookup);
+  return lookup;
+}
+
+async function safeSiteURL(value, context = {}) {
   try {
     const url = new URL(String(value || '').trim());
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.length > 500) return null;
+    if (url.protocol !== 'https:' || url.port && url.port !== '443' || url.username || url.password || url.href.length > 500) return null;
     const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === '::1' || host === '0.0.0.0') return null;
-    const parts = host.split('.').map(Number);
-    if (parts.length === 4 && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255)) {
-      if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0 || (parts[0] === 169 && parts[1] === 254) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127)) return null;
-    }
+    if (!await publicDNSHost(host, context)) return null;
     url.hash = '';
     return url.href;
   } catch (_) { return null; }
@@ -378,7 +499,7 @@ async function careSites(request, env) {
     return json(request, env, {sites: (rows.results || []).map(row => ({id:Number(row.id), name:row.name, url:row.url, createdAt:row.created_at}))});
   }
   const body = await bodyJSON(request);
-  const name = String(body.name || '').trim().slice(0, 60), url = safeSiteURL(body.url);
+  const name = String(body.name || '').trim().slice(0, 60), url = await safeSiteURL(body.url, {dns:new Map(), budget:{remaining:4}});
   if (!name || !url) return json(request, env, {error: '请填写名称和有效的公开网站地址。'}, 400);
   const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM monitored_sites').first();
   if (Number(count?.count) >= MAX_MONITORED_SITES) return json(request, env, {error: `最多可以添加 ${MAX_MONITORED_SITES} 个网站。`}, 400);
@@ -395,12 +516,25 @@ async function removeCareSite(request, env, id) {
   return json(request, env, {ok:true, removed:Number(result.meta?.changes) || 0});
 }
 
-async function checkSite(row) {
+async function checkSite(row, context) {
   const started = Date.now(), controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const response = await fetch(row.url, {method:'GET', redirect:'follow', signal:controller.signal, headers:{Accept:'text/html,application/json;q=0.9,*/*;q=0.1'}});
-    response.body?.cancel().catch(() => {});
-    return {id:Number(row.id), name:row.name, url:row.url, ok:response.status < 500, status:response.status, latency:Date.now() - started, checkedAt:new Date().toISOString()};
+    let target = await safeSiteURL(row.url, context);
+    if (!target) throw new Error('Blocked target');
+    for (let redirects = 0; redirects <= 3; redirects++) {
+      const response = await budgetedFetch(target, {method:'GET', redirect:'manual', signal:controller.signal, headers:{Accept:'text/html,application/json;q=0.9,*/*;q=0.1'}}, context.budget);
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('Location');
+        response.body?.cancel().catch(() => {});
+        if (!location || redirects === 3) throw new Error('Unsafe redirect');
+        target = await safeSiteURL(new URL(location, target).href, context);
+        if (!target) throw new Error('Unsafe redirect');
+        continue;
+      }
+      response.body?.cancel().catch(() => {});
+      return {id:Number(row.id), name:row.name, url:row.url, ok:response.status < 500, status:response.status, latency:Date.now() - started, checkedAt:new Date().toISOString()};
+    }
+    throw new Error('Too many redirects');
   } catch (error) {
     return {id:Number(row.id), name:row.name, url:row.url, ok:false, status:0, latency:Date.now() - started, checkedAt:new Date().toISOString(), error:error?.name === 'AbortError' ? '检查超时' : '无法连接'};
   } finally { clearTimeout(timeout); }
@@ -408,8 +542,17 @@ async function checkSite(row) {
 
 async function careSiteStatus(request, env) {
   if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
-  const rows = await env.DB.prepare('SELECT id, name, url FROM monitored_sites ORDER BY id LIMIT 20').all();
-  return json(request, env, {sites: await Promise.all((rows.results || []).map(checkSite))});
+  const rows = await env.DB.prepare(`SELECT id, name, url FROM monitored_sites ORDER BY id LIMIT ${MAX_MONITORED_SITES}`).all();
+  const pending = rows.results || [], sites = new Array(pending.length), context = {dns:new Map(), budget:{remaining:48}};
+  let cursor = 0;
+  async function worker() {
+    while (cursor < pending.length) {
+      const index = cursor++;
+      sites[index] = await checkSite(pending[index], context);
+    }
+  }
+  await Promise.all(Array.from({length:Math.min(2, pending.length)}, worker));
+  return json(request, env, {sites});
 }
 
 async function messageThread(request, env, role) {
@@ -578,22 +721,34 @@ async function claim(request, env) {
   if (password.length < 8 || password.length > 128) return json(request, env, {error: '同步密码需要 8 到 128 个字符。'}, 400);
   const tokenData = await verifyToken(env.SESSION_SECRET, bearer(request));
   const generation = await currentGeneration(env);
-  const initialAccess = tokenData?.role === 'admin' && constantTimeEqual(body.claimToken || '', env.CLAIM_TOKEN || '');
+  const rawExpiry = String(env.CLAIM_TOKEN_EXPIRES_AT || '');
+  const numericExpiry = Number(rawExpiry);
+  const claimExpiry = Number.isFinite(numericExpiry) && numericExpiry > 0 ? numericExpiry : Math.floor(Date.parse(rawExpiry) / 1000);
+  const claimMatches = !!env.CLAIM_TOKEN && constantTimeEqual(body.claimToken || '', env.CLAIM_TOKEN);
+  const initialAccess = tokenData?.role === 'admin' && claimMatches && Number.isFinite(claimExpiry) && claimExpiry > Math.floor(Date.now() / 1000);
   const resetAccess = tokenData?.role === 'setup' && Number(tokenData.generation) === generation;
   if (!initialAccess && !resetAccess) return json(request, env, {error: '请先通过管理员验证。'}, 403);
   const existing = await env.DB.prepare('SELECT id FROM auth WHERE id = 1').first();
   if (existing) return json(request, env, {error: '云端同步已经初始化，请使用同步密码登录。'}, 409);
+  let claimHash = '';
+  if (initialAccess) {
+    claimHash = bytesToBase64Url(await hmac(env.SESSION_SECRET, `claim:${body.claimToken}`));
+    const used = await env.DB.prepare('SELECT token_hash FROM claim_uses WHERE token_hash = ?').bind(claimHash).first();
+    if (used) return json(request, env, {error: '这个初始化链接已经使用过，请由管理员重新生成。'}, 409);
+  }
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const hash = await passwordHash(password, salt);
-  await env.DB.prepare('INSERT INTO auth (id, salt, password_hash, iterations, created_at) VALUES (1, ?, ?, ?, ?)').bind(bytesToBase64Url(salt), bytesToBase64Url(hash), PASSWORD_ITERATIONS, new Date().toISOString()).run();
+  const createdAt = new Date().toISOString();
+  const statements = [env.DB.prepare('INSERT INTO auth (id, salt, password_hash, iterations, created_at) VALUES (1, ?, ?, ?, ?)').bind(bytesToBase64Url(salt), bytesToBase64Url(hash), PASSWORD_ITERATIONS, createdAt)];
+  if (claimHash) statements.push(env.DB.prepare('INSERT INTO claim_uses (token_hash, used_at) VALUES (?, ?)').bind(claimHash, createdAt));
+  await env.DB.batch(statements);
   return json(request, env, {token: await issueToken(env.SESSION_SECRET, {role: 'user', generation}, USER_TOKEN_LIFETIME_SECONDS), expiresIn: USER_TOKEN_LIFETIME_SECONDS});
 }
 
 async function login(request, env) {
-  const status = await rateStatus(request, env, 'user');
-  if (status.blocked) return json(request, env, {error: '尝试次数过多，请 15 分钟后再试。'}, 429);
   const body = await bodyJSON(request);
   const password = typeof body.password === 'string' ? body.password : '';
+  const statuses = await rateStatuses(request, env, 'user', password);
   const row = await env.DB.prepare('SELECT salt, password_hash, iterations FROM auth WHERE id = 1').first();
   if (!row) return json(request, env, {error: '云端同步还没有初始化。'}, 409);
   let valid = false;
@@ -601,11 +756,14 @@ async function login(request, env) {
     const candidate = bytesToBase64Url(await passwordHash(password, base64UrlToBytes(row.salt), row.iterations));
     valid = constantTimeEqual(candidate, row.password_hash);
   }
-  if (!valid) {
-    await recordFailure(env, 'user', status);
-    return json(request, env, {error: '同步密码不正确。'}, 401);
+  if (!valid) return failedLogin(request, env, 'user', statuses, '同步密码不正确。');
+  await clearLoginFailures(env, 'user', statuses);
+  if (Number(row.iterations) < PASSWORD_ITERATIONS) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const hash = await passwordHash(password, salt);
+    await env.DB.prepare('UPDATE auth SET salt = ?, password_hash = ?, iterations = ?, created_at = ? WHERE id = 1')
+      .bind(bytesToBase64Url(salt), bytesToBase64Url(hash), PASSWORD_ITERATIONS, new Date().toISOString()).run();
   }
-  await clearFailures(env, 'user', status.fingerprint);
   const generation = await currentGeneration(env);
   return json(request, env, {token: await issueToken(env.SESSION_SECRET, {role: 'user', generation}, USER_TOKEN_LIFETIME_SECONDS), expiresIn: USER_TOKEN_LIFETIME_SECONDS});
 }
@@ -617,7 +775,16 @@ async function adminStatus(request, env) {
 }
 
 async function adminOverview(request, env) {
+  if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
+  return learningOverview(request, env);
+}
+
+async function careOverview(request, env) {
   if (!await careAuthorized(request, env)) return json(request, env, {error: '请重新验证进入密码。'}, 401);
+  return learningOverview(request, env);
+}
+
+async function learningOverview(request, env) {
   const [row, presence, mood, milestones, companion] = await Promise.all([
     env.DB.prepare('SELECT revision, updated_at, encoding, payload FROM sync_state WHERE id = 1').first(),
     env.DB.prepare('SELECT status, studying, active, last_seen_at FROM presence WHERE id = 1').first(),
@@ -655,7 +822,7 @@ async function updatePresence(request, env) {
 }
 
 async function adminReset(request, env) {
-  if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
+  if (!await adminAuthorized(request, env, FRESH_ADMIN_SECONDS)) return json(request, env, {error: '为了安全，请重新输入管理员密码后再重置。'}, 401);
   const updatedAt = new Date().toISOString();
   await env.DB.batch([env.DB.prepare('UPDATE auth_control SET generation = generation + 1, updated_at = ? WHERE id = 1').bind(updatedAt), env.DB.prepare('DELETE FROM auth WHERE id = 1')]);
   const generation = await currentGeneration(env);
@@ -691,7 +858,7 @@ async function adminPreviewSnapshot(request, env, id) {
 }
 
 async function adminRestoreSnapshot(request, env) {
-  if (!await adminAuthorized(request, env)) return json(request, env, {error: '请重新进行管理员验证。'}, 401);
+  if (!await adminAuthorized(request, env, FRESH_ADMIN_SECONDS)) return json(request, env, {error: '为了安全，请重新输入管理员密码后再恢复。'}, 401);
   const body = await bodyJSON(request), id = Number(body.id);
   if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error: '历史记录编号无效。'}, 400);
   const [snapshot, current] = await Promise.all([
@@ -771,6 +938,7 @@ export default {
       if (url.pathname === '/admin/session' && request.method === 'POST') return await adminSession(request, env);
       if (url.pathname === '/care/session' && request.method === 'POST') return await careSession(request, env);
       if (url.pathname === '/care/password' && request.method === 'PUT') return await setCarePassword(request, env);
+      if (url.pathname === '/care/overview' && request.method === 'GET') return await careOverview(request, env);
       if (url.pathname === '/care/sites' && ['GET', 'POST'].includes(request.method)) return await careSites(request, env);
       if (url.pathname === '/care/sites/status' && request.method === 'GET') return await careSiteStatus(request, env);
       if (url.pathname === '/care/messages' && request.method === 'GET') return await messageThread(request, env, 'owner');
