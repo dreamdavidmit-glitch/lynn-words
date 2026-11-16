@@ -7,6 +7,7 @@
   const DEVICE_KEY = 'lynn:syncDevice';
   const ADMIN_TOKEN_KEY = 'lynn:adminToken';
   const SETUP_TOKEN_KEY = 'lynn:setupToken';
+  const CLAIM_TOKEN_KEY = 'lynn:claimToken';
   const CLAIM_PREFIX = '#sync-setup=';
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -309,8 +310,17 @@
   }
 
   function claimTokenFromURL() {
-    return root.location?.hash.startsWith(CLAIM_PREFIX) ? decodeURIComponent(root.location.hash.slice(CLAIM_PREFIX.length)) : '';
+    if (root.location?.hash.startsWith(CLAIM_PREFIX)) {
+      try {
+        const value = decodeURIComponent(root.location.hash.slice(CLAIM_PREFIX.length));
+        if (value) session.set(CLAIM_TOKEN_KEY, value);
+      } catch (_) {}
+      root.history?.replaceState(null, '', root.location.pathname + root.location.search);
+    }
+    return session.get(CLAIM_TOKEN_KEY);
   }
+
+  claimTokenFromURL();
 
   function modalHTML() {
     const claimToken = claimTokenFromURL();
@@ -417,7 +427,7 @@
       authenticate(password, mode === 'claim' ? claimTokenFromURL() : '').then(async () => {
         if (mode === 'claim') {
           session.remove(ADMIN_TOKEN_KEY); session.remove(SETUP_TOKEN_KEY);
-          if (claimTokenFromURL()) root.history.replaceState(null, '', root.location.pathname + root.location.search);
+          session.remove(CLAIM_TOKEN_KEY);
         }
         const next = await reconcile(getState(), mode !== 'claim');
         if (accessResolve) {

@@ -47,7 +47,7 @@
     busy = true; error = '';
     if (!silent) renderDashboard();
     try {
-      const response = await fetch(`${ENDPOINT}/admin/overview`, {headers:{Authorization:`Bearer ${token()}`}, cache:'no-store'});
+      const response = await fetch(`${ENDPOINT}/care/overview`, {headers:{Authorization:`Bearer ${token()}`}, cache:'no-store'});
       if (response.status === 401) { setToken(''); throw new Error('管理员验证已过期，请重新输入密码。'); }
       if (!response.ok) throw new Error(await message(response));
       overview = await response.json();
@@ -60,7 +60,7 @@
   }
 
   function renderLogin() {
-    app.innerHTML = `<main class="login-wrap"><section class="login-paper"><div class="login-brand"><div class="brand-mark">L</div><div><strong>Lynn的小词窝</strong><small>PRIVATE CARE NOTE</small></div></div><div class="login-copy"><span class="paper-label">只给你看的私人入口</span><h1>看看她今天<br>有没有来过</h1><p>这里不展示具体答案，只留下在线状态、学习时长、网站运行情况和一点点成长的脚印。</p><form id="login-form"><label class="field">进入密码<input name="password" type="password" maxlength="128" autocomplete="current-password" required autofocus></label>${error ? `<div class="error" role="alert">${escape(error)}</div>` : ''}<button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? '小紫怪正在开门…' : '打开我的控制台'}<span>→</span></button></form><small class="privacy-note">第一次可以使用管理员密码进入，之后可在设置里换成独立进入密码。</small></div><div class="login-friend"><span class="friend-note">我会收好她的脚印，也会替你看着网站有没有好好运行。</span><img src="mascot.svg" alt="抱着单词本的小紫怪"></div></section></main>`;
+    app.innerHTML = `<main class="login-wrap"><section class="login-paper"><div class="login-brand"><div class="brand-mark">L</div><div><strong>Lynn的小词窝</strong><small>PRIVATE CARE NOTE</small></div></div><div class="login-copy"><span class="paper-label">只给你看的私人入口</span><h1>看看她今天<br>有没有来过</h1><p>这里不展示具体答案，只留下在线状态、学习时长、网站运行情况和一点点成长的脚印。</p><form id="login-form"><label class="field">进入密码<input name="password" type="password" maxlength="128" autocomplete="current-password" required autofocus></label>${error ? `<div class="error" role="alert">${escape(error)}</div>` : ''}<button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? '小紫怪正在开门…' : '打开我的控制台'}<span>→</span></button></form><small class="privacy-note">第一次可由管理员进入并设置独立密码；设置完成后只接受这里自己的密码。</small></div><div class="login-friend"><span class="friend-note">我会收好她的脚印，也会替你看着网站有没有好好运行。</span><img src="mascot.svg" alt="抱着单词本的小紫怪"></div></section></main>`;
   }
 
   function presenceView() {

@@ -12,13 +12,16 @@ const bytes = value => value instanceof ArrayBuffer ? Array.from(new Uint8Array(
 const payloadFor = revision => Buffer.from(JSON.stringify({app:'wordsequence-public',version:1,state:{decks:[{id:'deck-1',title:'CET-4',words:[{id:'a'},{id:'b'},{id:'c'}],progress:Object.fromEntries(['a','b','c'].slice(0,Math.min(3,revision)).map((id,index)=>[id,{seen:true,attempts:revision+index,longTermSuccesses:index?0:1,firstSeenDate:`2026-11-0${index+1}`,lastLongTermSuccessDate:index?'':`2026-11-0${index+1}`}]))}],activeDeckId:'deck-1',studyDays:['2026-11-01','2026-11-02','2026-11-03'].slice(0,Math.min(3,revision)),dailyLog:{'2026-11-01':{activeMs:600000,attempts:8,correct:6,wrong:2,rescueDone:[]},'2026-11-02':{activeMs:900000,attempts:12,correct:10,wrong:2,rescueDone:['a']},'2026-11-03':{activeMs:300000,attempts:4,correct:4,wrong:0,rescueDone:[]}},moodLog:revision>=8?{'2026-11-04':{level:'okay',note:'离线写下的心情',createdAt:1793793600000}}:{}}}));
 
 function memoryDB() {
-  const data = {state: null, presence: null, careAuth: null, companion: null, sites: [], messages: [], snapshots: [], moods: [], milestones: [], scheduled: [], surprises: [], photos: [], nextId: 1, nextSiteId: 1, nextMessageId: 1, nextMoodId: 1, nextScheduledId: 1, nextSurpriseId: 1, nextPhotoId: 1};
+  const data = {state: null, auth: null, authAttempts: [], claimUses: [], presence: null, careAuth: null, companion: null, sites: [], messages: [], snapshots: [], moods: [], milestones: [], scheduled: [], surprises: [], photos: [], nextId: 1, nextSiteId: 1, nextMessageId: 1, nextMoodId: 1, nextScheduledId: 1, nextSurpriseId: 1, nextPhotoId: 1};
   const statement = (sql, values = []) => ({
     sql: sql.replace(/\s+/g, ' ').trim(), values,
     bind(...next) { return statement(sql, next); },
     async first() {
       if (this.sql.includes('FROM auth_control')) return {generation: 1};
-      if (this.sql.includes('FROM auth_attempts')) return null;
+      if (this.sql.includes('FROM auth_attempts')) return data.authAttempts.find(item=>item.scope===this.values[0]&&item.fingerprint===this.values[1]) || null;
+      if (this.sql.includes('SELECT id FROM auth WHERE id = 1')) return data.auth ? {id:1} : null;
+      if (this.sql.includes('SELECT salt, password_hash, iterations FROM auth WHERE id = 1')) return data.auth ? {...data.auth} : null;
+      if (this.sql.includes('FROM claim_uses')) return data.claimUses.includes(this.values[0]) ? {token_hash:this.values[0]} : null;
       if (this.sql.includes('FROM care_auth')) return data.careAuth ? {...data.careAuth} : null;
       if (this.sql.includes('COUNT(*) AS count FROM monitored_sites')) return {count:data.sites.length};
       if (this.sql.includes('COUNT(*) AS count FROM room_photos')) return {count:data.photos.length};
@@ -102,6 +105,20 @@ function memoryDB() {
     if (sql.startsWith('INSERT INTO care_auth')) {
       data.careAuth = {salt:v[0], password_hash:v[1], iterations:Number(v[2]), updated_at:v[3]}; return {meta:{changes:1}};
     }
+    if (sql.startsWith('UPDATE care_auth SET')) {
+      data.careAuth = {salt:v[0], password_hash:v[1], iterations:Number(v[2]), updated_at:v[3]}; return {meta:{changes:1}};
+    }
+    if (sql.startsWith('INSERT INTO auth (')) {
+      if (data.auth) throw new Error('UNIQUE');
+      data.auth = {salt:v[0], password_hash:v[1], iterations:Number(v[2]), created_at:v[3]}; return {meta:{changes:1}};
+    }
+    if (sql.startsWith('UPDATE auth SET')) {
+      data.auth = {salt:v[0], password_hash:v[1], iterations:Number(v[2]), created_at:v[3]}; return {meta:{changes:1}};
+    }
+    if (sql.startsWith('INSERT INTO claim_uses')) {
+      if (data.claimUses.includes(v[0])) throw new Error('UNIQUE');
+      data.claimUses.push(v[0]); return {meta:{changes:1}};
+    }
     if (sql.startsWith('INSERT INTO monitored_sites')) {
       if (data.sites.some(site => site.url === v[1])) throw new Error('UNIQUE');
       const id = data.nextSiteId++; data.sites.push({id,name:v[0],url:v[1],created_at:v[2]}); return {meta:{changes:1,last_row_id:id}};
@@ -118,7 +135,14 @@ function memoryDB() {
     if (sql.startsWith('DELETE FROM messages WHERE id NOT IN')) {
       data.messages=data.messages.sort((a,b)=>b.id-a.id).slice(0,300); return {meta:{changes:0}};
     }
-    if (sql.startsWith('DELETE FROM auth_attempts')) return {meta:{changes:1}};
+    if (sql.startsWith('INSERT INTO auth_attempts')) {
+      const next={scope:v[0],fingerprint:v[1],failures:Number(v[2]),window_started:Number(v[3]),blocked_until:Number(v[4])};
+      const index=data.authAttempts.findIndex(item=>item.scope===next.scope&&item.fingerprint===next.fingerprint);
+      if(index>=0)data.authAttempts[index]=next;else data.authAttempts.push(next); return {meta:{changes:1}};
+    }
+    if (sql.startsWith('DELETE FROM auth_attempts')) {
+      const before=data.authAttempts.length; data.authAttempts=data.authAttempts.filter(item=>item.scope!==v[0]||item.fingerprint!==v[1]); return {meta:{changes:before-data.authAttempts.length}};
+    }
     if (sql.startsWith('DELETE FROM progress_snapshots')) { data.snapshots.sort((a,b)=>b.id-a.id); data.snapshots = data.snapshots.slice(0,7); return {meta:{changes:1}}; }
     throw new Error(`Unexpected batch statement: ${sql}`);
   }
@@ -129,13 +153,34 @@ function memoryDB() {
   const source = fs.readFileSync(path.join(__dirname, '..', 'cloudflare', 'src', 'worker.js'), 'utf8');
   const worker = (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).default;
   const secret = 'snapshot-test-secret-with-enough-entropy', db = memoryDB();
-  const env = {SESSION_SECRET:secret, ALLOWED_ORIGIN:'https://example.test', DB:db};
+  const adminPassword = 'Admin-Test-2026!', adminSalt = Buffer.from('0123456789abcdef');
+  const env = {SESSION_SECRET:secret, ALLOWED_ORIGIN:'https://example.test', DB:db, ADMIN_PASSWORD_SALT:adminSalt.toString('base64url'), ADMIN_PASSWORD_HASH:crypto.pbkdf2Sync(adminPassword,adminSalt,100000,32,'sha256').toString('base64url'), ADMIN_PASSWORD_ITERATIONS:'100000', CLAIM_TOKEN:'one-time-claim', CLAIM_TOKEN_EXPIRES_AT:String(Math.floor(Date.now()/1000)+600)};
   const user = signedToken(secret, 'user'), admin = signedToken(secret, 'admin');
+  let lastWrongAdmin;
+  for (let attempt=0;attempt<5;attempt++) lastWrongAdmin = await worker.fetch(new Request('https://sync.test/admin/session', {method:'POST',headers:{Origin:'https://example.test','Content-Type':'application/json','CF-Connecting-IP':'203.0.113.9'},body:JSON.stringify({password:'Wrong-Admin-Password!'})}), env);
+  assert.equal(lastWrongAdmin.status, 429, '连续错误应进入渐进等待');
+  const correctAfterAttack = await worker.fetch(new Request('https://sync.test/admin/session', {method:'POST',headers:{Origin:'https://example.test','Content-Type':'application/json','CF-Connecting-IP':'203.0.113.9'},body:JSON.stringify({password:adminPassword})}), env);
+  assert.equal(correctAfterAttack.status, 200, '同一网络上的正确密码不能被攻击者锁死');
   for (let revision = 0; revision < 8; revision++) {
     const response = await worker.fetch(new Request('https://sync.test/state', {method:'PUT', headers:{Authorization:`Bearer ${user}`, Origin:'https://example.test', 'X-Base-Revision':String(revision), 'X-Device-Id':'test-device', 'X-Payload-Encoding':'json'}, body:payloadFor(revision+1)}), env);
     assert.equal(response.status, 200, await response.text());
   }
   assert.equal(db.data.snapshots.length, 7);
+  const claimDB = memoryDB(), claimEnv = {...env, DB:claimDB};
+  const firstClaim = await worker.fetch(new Request('https://sync.test/claim', {method:'POST',headers:{Authorization:`Bearer ${admin}`,Origin:'https://example.test','Content-Type':'application/json'},body:JSON.stringify({password:'Lynn-Sync-2026!',claimToken:'one-time-claim'})}), claimEnv);
+  assert.equal(firstClaim.status, 200, await firstClaim.clone().text());
+  assert.equal((await firstClaim.clone().json()).expiresIn, 12*60*60, '普通登录凭证仅保留 12 小时');
+  const newHashLogin = await worker.fetch(new Request('https://sync.test/session', {method:'POST',headers:{Origin:'https://example.test','Content-Type':'application/json'},body:JSON.stringify({password:'Lynn-Sync-2026!'})}), claimEnv);
+  assert.equal(newHashLogin.status, 200, '分段 60 万次哈希必须可以正常登录');
+  claimDB.data.auth = null;
+  const reusedClaim = await worker.fetch(new Request('https://sync.test/claim', {method:'POST',headers:{Authorization:`Bearer ${admin}`,Origin:'https://example.test','Content-Type':'application/json'},body:JSON.stringify({password:'Another-Sync-2026!',claimToken:'one-time-claim'})}), claimEnv);
+  assert.equal(reusedClaim.status, 409, '初始化口令只能使用一次');
+  const oldSalt = Buffer.from('fedcba9876543210'), oldPassword = 'Old-Sync-Password!';
+  const upgradeDB = memoryDB();
+  upgradeDB.data.auth = {salt:oldSalt.toString('base64url'),password_hash:crypto.pbkdf2Sync(oldPassword,oldSalt,100000,32,'sha256').toString('base64url'),iterations:100000,created_at:new Date().toISOString()};
+  const upgradedLogin = await worker.fetch(new Request('https://sync.test/session', {method:'POST',headers:{Origin:'https://example.test','Content-Type':'application/json'},body:JSON.stringify({password:oldPassword})}), {...env,DB:upgradeDB});
+  assert.equal(upgradedLogin.status, 200, await upgradedLogin.clone().text());
+  assert.equal(upgradeDB.data.auth.iterations, 600000, '旧同步密码应在正确登录后自动升级哈希强度');
   assert.equal(db.data.snapshots[0].revision, 8);
   const list = await worker.fetch(new Request('https://sync.test/admin/snapshots', {headers:{Authorization:`Bearer ${admin}`, Origin:'https://example.test'}}), env);
   const history = await list.json();
@@ -169,12 +214,14 @@ function memoryDB() {
   const staleOverviewResponse = await worker.fetch(new Request('https://sync.test/admin/overview', {headers:{Authorization:`Bearer ${admin}`, Origin:'https://example.test'}}), env);
   const staleOverview = await staleOverviewResponse.json();
   assert.equal(staleOverview.presence.state, 'offline');
-  const carePassword = 'private-care-test';
+  const carePassword = 'Private-Care-2026!';
   const setPassword = await worker.fetch(new Request('https://sync.test/care/password', {method:'PUT', headers:{Authorization:`Bearer ${admin}`, Origin:'https://example.test','Content-Type':'application/json'}, body:JSON.stringify({password:carePassword})}), env);
   assert.equal(setPassword.status, 200, await setPassword.clone().text());
   const careLogin = await worker.fetch(new Request('https://sync.test/care/session', {method:'POST', headers:{Origin:'https://example.test','Content-Type':'application/json'}, body:JSON.stringify({password:carePassword})}), env);
   assert.equal(careLogin.status, 200, await careLogin.clone().text());
   const careToken = (await careLogin.json()).token;
+  const adminFallbackBlocked = await worker.fetch(new Request('https://sync.test/care/session', {method:'POST', headers:{Origin:'https://example.test','Content-Type':'application/json'}, body:JSON.stringify({password:adminPassword})}), env);
+  assert.equal(adminFallbackBlocked.status, 401, '独立陪伴密码设置后，管理员总密码不能再进入陪伴端');
   const companionOn = await worker.fetch(new Request('https://sync.test/care/companion', {method:'POST', headers:{Authorization:`Bearer ${careToken}`,Origin:'https://example.test','Content-Type':'application/json'}, body:JSON.stringify({active:true,minutes:45})}), env);
   assert.equal(companionOn.status, 200, await companionOn.clone().text());
   assert.equal((await companionOn.json()).companion.active, true);
@@ -206,16 +253,27 @@ function memoryDB() {
   assert.deepEqual(Array.from(new Uint8Array(await ownPhoto.arrayBuffer())), [82,73,70,70,1,2,3,4]);
   const openLetter = await worker.fetch(new Request(`https://sync.test/surprises/${surpriseId}/open`, {method:'POST',headers:{Authorization:`Bearer ${user}`,Origin:'https://example.test'}}), env);
   assert.equal(openLetter.status, 200, await openLetter.clone().text());
-  const updatedOverviewResponse = await worker.fetch(new Request('https://sync.test/admin/overview', {headers:{Authorization:`Bearer ${careToken}`, Origin:'https://example.test'}}), env);
+  const careCannotReadAdminOverview = await worker.fetch(new Request('https://sync.test/admin/overview', {headers:{Authorization:`Bearer ${careToken}`, Origin:'https://example.test'}}), env);
+  assert.equal(careCannotReadAdminOverview.status, 401, '陪伴凭证不能调用管理员接口');
+  const updatedOverviewResponse = await worker.fetch(new Request('https://sync.test/care/overview', {headers:{Authorization:`Bearer ${careToken}`, Origin:'https://example.test'}}), env);
   assert.equal(updatedOverviewResponse.status, 200, await updatedOverviewResponse.clone().text());
   const updatedOverview = await updatedOverviewResponse.json();
   assert.equal(updatedOverview.mood.note, '今天有一点累');
   assert.equal(updatedOverview.companion.active, true);
-  const addSite = await worker.fetch(new Request('https://sync.test/care/sites', {method:'POST', headers:{Authorization:`Bearer ${careToken}`,Origin:'https://example.test','Content-Type':'application/json'}, body:JSON.stringify({name:'Test Site',url:'https://status.example.test/'})}), env);
+  const realFetch = global.fetch;
+  global.fetch = async input => {
+    const url = new URL(typeof input === 'string' ? input : input.url);
+    if (url.hostname === 'cloudflare-dns.com') return Response.json({Status:0,Answer:[{type:Number(url.searchParams.get('type')),data:url.searchParams.get('type')==='1'?'93.184.216.34':'2606:2800:220:1:248:1893:25c8:1946'}]});
+    if (url.hostname === 'example.com') return new Response('ok', {status:200});
+    throw new Error(`Unexpected fetch: ${url.href}`);
+  };
+  for (const unsafeURL of ['http://example.com/','https://127.0.0.1/','https://2130706433/','https://[::1]/','https://[::ffff:127.0.0.1]/','https://[fc00::1]/','https://example.com:8443/']) {
+    const blockedPrivateSite = await worker.fetch(new Request('https://sync.test/care/sites', {method:'POST', headers:{Authorization:`Bearer ${careToken}`,Origin:'https://example.test','Content-Type':'application/json'}, body:JSON.stringify({name:'Private',url:unsafeURL})}), env);
+    assert.equal(blockedPrivateSite.status, 400, `危险网站地址必须被拒绝：${unsafeURL}`);
+  }
+  const addSite = await worker.fetch(new Request('https://sync.test/care/sites', {method:'POST', headers:{Authorization:`Bearer ${careToken}`,Origin:'https://example.test','Content-Type':'application/json'}, body:JSON.stringify({name:'Test Site',url:'https://example.com/'})}), env);
   assert.equal(addSite.status, 201, await addSite.clone().text());
   const addedSite = await addSite.json();
-  const realFetch = global.fetch;
-  global.fetch = async () => new Response('ok', {status:200});
   const sitesStatus = await worker.fetch(new Request('https://sync.test/care/sites/status', {headers:{Authorization:`Bearer ${careToken}`,Origin:'https://example.test'}}), env);
   global.fetch = realFetch;
   assert.equal(sitesStatus.status, 200, await sitesStatus.clone().text());

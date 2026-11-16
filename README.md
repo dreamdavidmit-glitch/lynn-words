@@ -17,7 +17,9 @@
 - 管理员可以从云朵面板重置 Lynn 的同步密码；旧设备登录会立即失效，但云端学习进度会保留。
 - Cloudflare 的密钥只保存在 Worker Secrets 中，不会进入 GitHub 仓库。
 
-Cloudflare 配置在 `cloudflare/`。部署前需要在 Worker Secrets 中设置 `CLAIM_TOKEN`、`SESSION_SECRET`、`ADMIN_PASSWORD_SALT` 与 `ADMIN_PASSWORD_HASH`，再运行 D1 migration 与 Worker deploy。不要把真实密码或密钥写进代码、说明文件或提交记录。
+Cloudflare 配置在 `cloudflare/`。部署前需要在 Worker Secrets 中设置 `CLAIM_TOKEN`、`CLAIM_TOKEN_EXPIRES_AT`、`SESSION_SECRET`、`ADMIN_PASSWORD_SALT`、`ADMIN_PASSWORD_HASH` 与 `ADMIN_PASSWORD_ITERATIONS`，再运行 D1 migration 与 Worker deploy。`CLAIM_TOKEN_EXPIRES_AT` 使用未来的 Unix 秒数，初始化口令过期或成功使用一次后都会失效。管理员密码哈希使用六段连续的 PBKDF2-SHA256，每段 100,000 次（Cloudflare Workers 单次 PBKDF2 的上限），总计 600,000 次；升级旧部署时必须同时重新生成管理员盐值和哈希，并把 `ADMIN_PASSWORD_ITERATIONS` 设为 `600000`。不要把真实密码或密钥写进代码、说明文件或提交记录。
+
+安全修复版会自动把 Lynn 的同步密码和陪伴端密码从旧的 100,000 次哈希升级到 600,000 次，不需要重置她的密码。普通设备凭证有效 12 小时，网页仍会在每次重新打开时要求输入同步密码；管理员重置和恢复进度则要求 5 分钟内刚刚完成的管理员验证。网站状态检查只接受 HTTPS 公网地址，并会逐次检查 DNS 与跳转目标。
 
 ## 节日主题
 
