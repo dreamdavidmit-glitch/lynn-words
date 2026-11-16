@@ -9,14 +9,14 @@
   const photoURLs = new Map();
   const moodNames = {tired:'今天有点累', okay:'今天还可以', good:'今天状态很好'};
   const rooms = [
-    {key:'bed', stars:20, icon:'🛏️', name:'云朵小床'},
-    {key:'lamp', stars:60, icon:'💡', name:'一盏暖灯'},
-    {key:'shelf', stars:120, icon:'📚', name:'紫色书架'},
-    {key:'window', stars:220, icon:'🪟', name:'星光窗户'},
-    {key:'rug', stars:350, icon:'🟣', name:'软软地毯'},
-    {key:'plant', stars:550, icon:'🪴', name:'记忆小树'},
-    {key:'outfit', stars:850, icon:'👗', name:'紫怪新衣'},
-    {key:'crown', stars:1300, icon:'👑', name:'小紫怪皇冠'}
+    {key:'bed', stars:20, asset:'assets/room/bed-ai-v1.webp', name:'云朵小床'},
+    {key:'lamp', stars:60, asset:'assets/room/lamp-ai-v1.webp', name:'一盏暖灯'},
+    {key:'shelf', stars:120, asset:'assets/room/shelf-ai-v1.webp', name:'紫色书架'},
+    {key:'window', stars:220, asset:'assets/room/window-curtains-ai-v2.webp', name:'星光窗户'},
+    {key:'rug', stars:350, asset:'assets/room/rug-ai-v1.webp', name:'软软地毯'},
+    {key:'plant', stars:550, asset:'assets/room/plant-ai-v1.webp', name:'记忆小树'},
+    {key:'outfit', stars:850, asset:'assets/room/outfit-rack-ai-v1.webp', name:'紫怪新衣'},
+    {key:'crown', stars:1300, asset:'assets/room/crown-ai-v1.webp', name:'小紫怪皇冠'}
   ];
   const monsterPhrases = ['我在认真读这一页！','再戳一下，我就要跳起来啦。','今天的星光也收好啦 ✦','慢慢背，我会一直在房间里。','这个房间越来越像家啦。'];
   const festivalPhrases = {
@@ -79,10 +79,10 @@
     const themeClass = theme ? ` room-theme-${theme.slug}` : '';
     const lunarLantern = theme && ['newyear','spring','lantern'].includes(theme.slug) ? '<img class="room-season-lantern" src="room-prop-lantern-v1.webp" alt="">' : '';
     const christmasTree = theme?.slug === 'christmas' ? '<img class="room-season-tree" src="assets/christmas/christmas-tree.png" alt="">' : '';
-    const themeDecor = theme ? `<div class="room-season-decor" aria-hidden="true">${theme.marks.map(mark => `<i>${escape(mark)}</i>`).join('')}${lunarLantern}${christmasTree}</div><span class="room-season-badge">${escape(theme.label)}</span>` : '';
+    const themeDecor = theme ? `<div class="room-season-decor" aria-hidden="true">${lunarLantern}${christmasTree}</div><span class="room-season-badge">${escape(theme.label)}</span>` : '';
     const monster = theme ? `<img class="monster-awake monster-festival" src="${escape(theme.mascot)}" alt="穿着${escape(theme.label)}的小紫怪">` : '<img class="monster-awake" src="mascot-room-3d-v1.webp" alt="房间里的 3D 小紫怪"><img class="monster-blink" src="mascot-room-3d-blink-v1.webp" alt="" aria-hidden="true">';
-    const photos = (cloud.photos || []).map(photo => `<figure class="room-photo"><div class="room-photo-frame"><span>正在取照片…</span><img data-room-photo="${photo.id}" alt="${escape(photo.caption || 'Lynn 放进房间的照片')}"></div><figcaption>${escape(photo.caption || '房间里的小照片')}<button type="button" data-companion-action="delete-photo" data-id="${photo.id}" aria-label="移除这张照片">×</button></figcaption></figure>`).join('');
-    return `<section class="companion-card room-card"><div class="room-copy"><span class="companion-label">LITTLE MONSTER'S ROOM · 3D</span><h2>小紫怪的房间</h2><p>认真学习会变成星光，慢慢把房间填满。休息不会扣掉任何东西。</p><div class="star-wallet">✦ ${total} 点星光</div>${next ? `<small>再有 ${next.stars - total} 点，解锁「${next.name}」</small>` : '<small>房间里的东西已经全部亮起来啦。</small>'}<div class="room-unlocks">${rooms.map(item => `<span class="${owned.has(item.key) ? 'owned' : 'locked'}" title="${item.name} · ${item.stars} 点">${owned.has(item.key) ? item.icon : '·'}<b>${item.name}</b><small>${item.stars}</small></span>`).join('')}</div></div><div class="monster-room ${[...owned].map(key => 'has-' + key).join(' ')}${themeClass}" data-room-theme="${theme ? escape(theme.slug) : ''}">${themeDecor}<div class="room-ambient"><i></i><i></i><i></i></div><div class="room-window"><i></i><b></b></div><img class="room-prop room-prop-curtains" src="room-prop-curtains-v1.webp" alt="紫色束帘"><div class="room-bed"><i></i><b></b><span></span></div><div class="room-lamp"><i></i><b></b><span></span></div><img class="room-prop room-prop-shelf" src="room-prop-shelf-v1.webp" alt="紫色书架"><div class="room-outfit"><i></i><b></b></div><div class="room-plant"><i></i><b></b><span></span></div><div class="room-rug"></div><div class="room-pouf"></div><button type="button" class="room-monster" data-companion-action="play-monster" aria-label="戳一戳房间里的小紫怪"><span class="monster-shadow"></span>${monster}</button><div class="room-crown">♛</div><div class="room-speech" aria-live="polite">${theme ? escape(theme.label) : '戳戳我，我会动哦'}</div></div><div class="room-gallery"><div class="room-gallery-head"><div><h3>房间照片墙</h3><p>从相册挑喜欢的照片放进小房间，最多 12 张。</p></div><label class="photo-upload">从相册选择<input type="file" accept="image/jpeg,image/png,image/webp" data-room-upload></label></div><label class="photo-caption">给照片写一句话（可不写）<input maxlength="120" data-room-caption placeholder="例如：今天让我开心的小事情"></label><div class="room-photos">${photos || '<p class="room-photo-empty">照片墙还是空的，第一张由你来选。</p>'}</div></div></section>`;
+    const photos = (cloud.photos || []).map(photo => `<figure class="room-photo"><div class="room-photo-frame"><span data-photo-status>正在取照片…</span><img data-room-photo="${photo.id}" alt="${escape(photo.caption || 'Lynn 放进房间的照片')}"><button type="button" class="photo-retry" data-companion-action="retry-photo" data-id="${photo.id}">重新加载</button></div><figcaption>${escape(photo.caption || '房间里的小照片')}<button type="button" data-companion-action="delete-photo" data-id="${photo.id}" aria-label="移除这张照片">×</button></figcaption></figure>`).join('');
+    return `<section class="companion-card room-card"><div class="room-copy"><span class="companion-label">LITTLE MONSTER'S ROOM · 3D</span><h2>小紫怪的房间</h2><p>认真学习会变成星光，慢慢把房间填满。休息不会扣掉任何东西。</p><div class="star-wallet">✦ ${total} 点星光</div>${next ? `<small>再有 ${next.stars - total} 点，解锁「${next.name}」</small>` : '<small>房间里的东西已经全部亮起来啦。</small>'}<div class="room-unlocks">${rooms.map(item => `<span class="${owned.has(item.key) ? 'owned' : 'locked'}" title="${item.name} · ${item.stars} 点"><img src="${item.asset}" alt="" aria-hidden="true"><b>${item.name}</b><small>${item.stars}</small></span>`).join('')}</div></div><div class="monster-room ${[...owned].map(key => 'has-' + key).join(' ')}${themeClass}" data-room-theme="${theme ? escape(theme.slug) : ''}">${themeDecor}<img class="room-prop room-rug" src="assets/room/rug-ai-v1.webp" alt="柔软的星光地毯"><img class="room-prop room-window" src="assets/room/window-curtains-ai-v2.webp" alt="带月光窗景的柔软窗帘"><img class="room-prop room-bed" src="assets/room/bed-ai-v1.webp" alt="云朵小床"><img class="room-prop room-lamp" src="assets/room/lamp-ai-v1.webp" alt="暖暖的星星落地灯"><img class="room-prop room-shelf" src="assets/room/shelf-ai-v1.webp" alt="紫色书架"><img class="room-prop room-outfit" src="assets/room/outfit-rack-ai-v1.webp" alt="小紫怪的新衣架"><img class="room-prop room-plant" src="assets/room/plant-ai-v1.webp" alt="记忆小树"><button type="button" class="room-monster" data-companion-action="play-monster" aria-label="戳一戳房间里的小紫怪"><span class="monster-shadow"></span>${monster}<img class="room-crown" src="assets/room/crown-ai-v1.webp" alt="小紫怪的星光皇冠"></button><div class="room-speech" aria-live="polite">${theme ? escape(theme.label) : '戳戳我，我会动哦'}</div></div><div class="room-gallery"><div class="room-gallery-head"><div><h3>房间照片墙</h3><p>从相册挑喜欢的照片放进小房间，最多 12 张。</p></div><label class="photo-upload">从相册选择<input type="file" accept="image/jpeg,image/png,image/webp" data-room-upload></label></div><label class="photo-caption">给照片写一句话（可不写）<input maxlength="120" data-room-caption placeholder="例如：今天让我开心的小事情"></label><div class="room-photos">${photos || '<p class="room-photo-empty">照片墙还是空的，第一张由你来选。</p>'}</div></div></section>`;
   }
 
   function milestonesHTML() {
@@ -105,15 +105,45 @@
     hydratePhotos();
   }
 
-  async function hydratePhotos() {
-    for (const image of document.querySelectorAll('img[data-room-photo]')) {
-      const id = Number(image.dataset.roomPhoto);
-      try {
-        let url = photoURLs.get(id);
-        if (!url) { url = URL.createObjectURL(await root.LynnSync.roomPhoto(id)); photoURLs.set(id, url); }
-        image.src = url; image.closest('.room-photo-frame')?.classList.add('loaded');
-      } catch (_) { image.closest('.room-photo-frame')?.classList.add('failed'); }
+  async function showPhoto(image, url) {
+    const frame = image.closest('.room-photo-frame');
+    frame?.classList.remove('loaded', 'failed');
+    const ready = new Promise((resolve, reject) => {
+      image.addEventListener('load', resolve, {once:true});
+      image.addEventListener('error', () => reject(new Error('照片解码失败')), {once:true});
+    });
+    image.src = url;
+    if (!(image.complete && image.naturalWidth > 0)) await ready;
+    if (typeof image.decode === 'function') await image.decode().catch(() => {});
+    frame?.classList.add('loaded');
+  }
+
+  async function hydratePhoto(image, force = false) {
+    const id = Number(image.dataset.roomPhoto), frame = image.closest('.room-photo-frame');
+    const status = frame?.querySelector('[data-photo-status]');
+    try {
+      if (force) {
+        const previous = photoURLs.get(id);
+        if (previous) URL.revokeObjectURL(previous);
+        photoURLs.delete(id);
+      }
+      let url = photoURLs.get(id);
+      if (!url) {
+        const blob = await root.LynnSync.roomPhoto(id);
+        if (!blob?.size) throw new Error('云端返回的照片是空的');
+        url = URL.createObjectURL(blob);
+        photoURLs.set(id, url);
+      }
+      await showPhoto(image, url);
+    } catch (_) {
+      frame?.classList.remove('loaded');
+      frame?.classList.add('failed');
+      if (status) status.textContent = '照片暂时没取到';
     }
+  }
+
+  async function hydratePhotos() {
+    await Promise.allSettled([...document.querySelectorAll('img[data-room-photo]')].map(image => hydratePhoto(image)));
   }
 
   async function compressPhoto(file) {
@@ -171,6 +201,16 @@
       try { const result = await root.LynnSync.openSurprise(button.dataset.id); cloud.surprises = cloud.surprises.filter(item => item.id !== result.letter.id); inject(); showLetter(result.letter); }
       catch (reason) { error = reason.message; inject(); }
     }
+    if (action === 'retry-photo') {
+      const image = button.closest('.room-photo-frame')?.querySelector('img[data-room-photo]');
+      if (!image) return;
+      button.disabled = true;
+      const status = button.closest('.room-photo-frame')?.querySelector('[data-photo-status]');
+      if (status) status.textContent = '正在重新取照片…';
+      await hydratePhoto(image, true);
+      button.disabled = false;
+      return;
+    }
     if (action === 'delete-photo') {
       if (!confirm('把这张照片从小紫怪房间移除吗？')) return;
       button.disabled = true;
@@ -182,6 +222,7 @@
   root.addEventListener('lynn-sync-status', () => { if (connected()) load(true); else inject(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && connected()) load(true); });
   setInterval(() => { if (!document.hidden && connected()) load(true); }, 60_000);
+  root.addEventListener('pagehide', () => { for (const url of photoURLs.values()) URL.revokeObjectURL(url); photoURLs.clear(); });
 
   root.LynnCompanion = {
     render(nextContext) { context = nextContext; inject(); if (connected() && !loading && !loaded) load(true); }

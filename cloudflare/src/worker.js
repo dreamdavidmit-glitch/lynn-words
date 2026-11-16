@@ -93,6 +93,7 @@ function json(request, env, data, status = 200) {
 function blobValue(value) {
   if (value instanceof ArrayBuffer) return value;
   if (ArrayBuffer.isView(value)) return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+  if (value && typeof value === 'object' && Array.isArray(value.data)) return Uint8Array.from(value.data).buffer;
   return Uint8Array.from(value || []).buffer;
 }
 
@@ -706,6 +707,7 @@ async function roomPhoto(request, env, id) {
   const row = await env.DB.prepare('SELECT content_type, blob_data FROM room_photos WHERE id = ?').bind(id).first();
   if (!row?.blob_data) return json(request, env, {error:'图片不存在。'}, 404);
   const bytes = blobValue(row.blob_data);
+  if (!bytes.byteLength || bytes.byteLength > MAX_ROOM_PHOTO) return json(request, env, {error:'云端图片数据已损坏，请重新上传。'}, 422);
   return new Response(bytes, {headers:headers(request, env, {'Content-Type':row.content_type, 'Content-Length':String(bytes.byteLength), 'Cache-Control':'private, max-age=300'})});
 }
 

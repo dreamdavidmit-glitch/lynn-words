@@ -168,7 +168,10 @@
   async function roomPhoto(id) {
     const response = await api(`/room/photos/${Number(id)}`);
     if (!response.ok) throw new Error(await errorMessage(response));
-    return response.blob();
+    const blob = await response.blob();
+    if (!blob.size) throw new Error('云端照片是空的，请重新上传。');
+    if (!/^image\/(jpeg|png|webp)$/.test(blob.type || '')) throw new Error('云端照片格式不正确。');
+    return blob;
   }
 
   async function removeRoomPhoto(id) {

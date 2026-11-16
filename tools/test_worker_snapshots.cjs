@@ -248,6 +248,7 @@ function memoryDB() {
   assert.ok(companionBody.milestones.some(item=>item.code==='first-study'));
   const privatePhoto = await worker.fetch(new Request(`https://sync.test/room/photos/${photoId}`, {headers:{Origin:'https://example.test'}}), env);
   assert.equal(privatePhoto.status, 401);
+  db.data.photos[0].blob_data = {type:'Buffer', data:[82,73,70,70,1,2,3,4]};
   const ownPhoto = await worker.fetch(new Request(`https://sync.test/room/photos/${photoId}`, {headers:{Authorization:`Bearer ${user}`,Origin:'https://example.test'}}), env);
   assert.equal(ownPhoto.status, 200);
   assert.deepEqual(Array.from(new Uint8Array(await ownPhoto.arrayBuffer())), [82,73,70,70,1,2,3,4]);
