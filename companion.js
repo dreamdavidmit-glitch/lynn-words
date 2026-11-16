@@ -9,19 +9,43 @@
   const photoURLs = new Map();
   const moodNames = {tired:'今天有点累', okay:'今天还可以', good:'今天状态很好'};
   const rooms = [
-    {key:'lamp', stars:25, icon:'🛋️', name:'一盏暖灯'},
-    {key:'shelf', stars:100, icon:'📚', name:'紫色书架'},
-    {key:'window', stars:250, icon:'🪟', name:'星光窗户'},
-    {key:'rug', stars:500, icon:'🟣', name:'软软地毯'},
-    {key:'plant', stars:900, icon:'🪴', name:'记忆小树'},
-    {key:'crown', stars:1600, icon:'👑', name:'小紫怪皇冠'}
+    {key:'bed', stars:20, icon:'🛏️', name:'云朵小床'},
+    {key:'lamp', stars:60, icon:'💡', name:'一盏暖灯'},
+    {key:'shelf', stars:120, icon:'📚', name:'紫色书架'},
+    {key:'window', stars:220, icon:'🪟', name:'星光窗户'},
+    {key:'rug', stars:350, icon:'🟣', name:'软软地毯'},
+    {key:'plant', stars:550, icon:'🪴', name:'记忆小树'},
+    {key:'outfit', stars:850, icon:'👗', name:'紫怪新衣'},
+    {key:'crown', stars:1300, icon:'👑', name:'小紫怪皇冠'}
   ];
+  const monsterPhrases = ['我在认真读这一页！','再戳一下，我就要跳起来啦。','今天的星光也收好啦 ✦','慢慢背，我会一直在房间里。','这个房间越来越像家啦。'];
+  const festivalPhrases = {
+    christmas:['圣诞帽戴好啦，今天也要开心！','这份圣诞星光留给你 ✦'],
+    lidong:['棉衣穿好啦，慢慢背也很暖。','先喝口热水，再认识一个词。'],
+    dongzhi:['最长的夜，也会等来更长的光。','今天要暖暖地学一点。'],
+    newyear:['新年第一颗星光已经点亮！','新的一年，也继续陪你背词。'],
+    spring:['小紫怪给你拜年啦！','新岁平安，今天也有好运。'],
+    lantern:['灯亮起来啦，心愿也会慢慢靠近。','汤圆负责甜，我负责陪你背。'],
+    qingming:['春风来了，今天温柔地学一点。','新绿正在长大，你也一样。'],
+    dragonboat:['香囊系好啦，祝你端午安康。','一起划过今天这一小组！'],
+    qixi:['把今天的认真收进星河里。','愿所有真心都被温柔接住。'],
+    midautumn:['月亮很圆，今天的陪伴也在。','月饼慢慢吃，单词慢慢记。'],
+    national:['去看更大的世界，也别忘了自己的方向。','今天向喜欢的未来再走一点。']
+  };
 
   const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
   const connected = () => !!root.LynnSync?.connected?.();
-  const stars = () => Math.max(0, (context?.seen || 0) + (context?.remembered || 0) * 2 + (context?.studyDays || 0) * 5);
+  const roomPreview = () => new URLSearchParams(root.location?.search || '').get('room-preview') === 'full';
+  const stars = () => roomPreview() ? 1600 : Math.max(0, (context?.seen || 0) + (context?.remembered || 0) * 2 + (context?.studyDays || 0) * 5);
   const unlocked = () => rooms.filter(item => stars() >= item.stars);
   const nextRoom = () => rooms.find(item => stars() < item.stars);
+  function roomTheme() {
+    const christmas = root.LynnChristmas?.info?.();
+    if (christmas) return {slug:'christmas', label:'圣诞周限定装扮', mascot:christmas.mascot, marks:['🎄','❄','🎁']};
+    const festival = root.LynnFestivals?.info?.();
+    if (!festival) return null;
+    return {slug:festival.slug, label:`${festival.salutation}限定装扮`, mascot:festival.mascot, marks:(festival.decorations || []).slice(0, 3)};
+  }
 
   async function load(silent = false) {
     if (!connected() || loading) return;
@@ -51,8 +75,14 @@
 
   function roomHTML() {
     const total = stars(), owned = new Set(unlocked().map(item => item.key)), next = nextRoom();
+    const theme = roomTheme();
+    const themeClass = theme ? ` room-theme-${theme.slug}` : '';
+    const lunarLantern = theme && ['newyear','spring','lantern'].includes(theme.slug) ? '<img class="room-season-lantern" src="room-prop-lantern-v1.webp" alt="">' : '';
+    const christmasTree = theme?.slug === 'christmas' ? '<img class="room-season-tree" src="assets/christmas/christmas-tree.png" alt="">' : '';
+    const themeDecor = theme ? `<div class="room-season-decor" aria-hidden="true">${theme.marks.map(mark => `<i>${escape(mark)}</i>`).join('')}${lunarLantern}${christmasTree}</div><span class="room-season-badge">${escape(theme.label)}</span>` : '';
+    const monster = theme ? `<img class="monster-awake monster-festival" src="${escape(theme.mascot)}" alt="穿着${escape(theme.label)}的小紫怪">` : '<img class="monster-awake" src="mascot-room-3d-v1.webp" alt="房间里的 3D 小紫怪"><img class="monster-blink" src="mascot-room-3d-blink-v1.webp" alt="" aria-hidden="true">';
     const photos = (cloud.photos || []).map(photo => `<figure class="room-photo"><div class="room-photo-frame"><span>正在取照片…</span><img data-room-photo="${photo.id}" alt="${escape(photo.caption || 'Lynn 放进房间的照片')}"></div><figcaption>${escape(photo.caption || '房间里的小照片')}<button type="button" data-companion-action="delete-photo" data-id="${photo.id}" aria-label="移除这张照片">×</button></figcaption></figure>`).join('');
-    return `<section class="companion-card room-card"><div class="room-copy"><span class="companion-label">LITTLE MONSTER'S ROOM</span><h2>小紫怪的房间</h2><p>认真学习会变成星光，慢慢把房间填满。休息不会扣掉任何东西。</p><div class="star-wallet">✦ ${total} 点星光</div>${next ? `<small>再有 ${next.stars - total} 点，解锁「${next.name}」</small>` : '<small>房间里的东西已经全部亮起来啦。</small>'}<div class="room-unlocks">${rooms.map(item => `<span class="${owned.has(item.key) ? 'owned' : 'locked'}" title="${item.name} · ${item.stars} 点">${owned.has(item.key) ? item.icon : '·'}<b>${item.name}</b></span>`).join('')}</div></div><div class="monster-room ${[...owned].map(key => 'has-' + key).join(' ')}"><div class="room-window">✦</div><div class="room-lamp">☼</div><div class="room-shelf">A B C</div><div class="room-plant">♧</div><div class="room-rug"></div><img src="mascot.svg" alt="小紫怪在自己的房间里"><div class="room-crown">♛</div></div><div class="room-gallery"><div class="room-gallery-head"><div><h3>房间照片墙</h3><p>从相册挑喜欢的照片放进小房间，最多 12 张。</p></div><label class="photo-upload">从相册选择<input type="file" accept="image/jpeg,image/png,image/webp" data-room-upload></label></div><label class="photo-caption">给照片写一句话（可不写）<input maxlength="120" data-room-caption placeholder="例如：今天让我开心的小事情"></label><div class="room-photos">${photos || '<p class="room-photo-empty">照片墙还是空的，第一张由你来选。</p>'}</div></div></section>`;
+    return `<section class="companion-card room-card"><div class="room-copy"><span class="companion-label">LITTLE MONSTER'S ROOM · 3D</span><h2>小紫怪的房间</h2><p>认真学习会变成星光，慢慢把房间填满。休息不会扣掉任何东西。</p><div class="star-wallet">✦ ${total} 点星光</div>${next ? `<small>再有 ${next.stars - total} 点，解锁「${next.name}」</small>` : '<small>房间里的东西已经全部亮起来啦。</small>'}<div class="room-unlocks">${rooms.map(item => `<span class="${owned.has(item.key) ? 'owned' : 'locked'}" title="${item.name} · ${item.stars} 点">${owned.has(item.key) ? item.icon : '·'}<b>${item.name}</b><small>${item.stars}</small></span>`).join('')}</div></div><div class="monster-room ${[...owned].map(key => 'has-' + key).join(' ')}${themeClass}" data-room-theme="${theme ? escape(theme.slug) : ''}">${themeDecor}<div class="room-ambient"><i></i><i></i><i></i></div><div class="room-window"><i></i><b></b></div><img class="room-prop room-prop-curtains" src="room-prop-curtains-v1.webp" alt="紫色束帘"><div class="room-bed"><i></i><b></b><span></span></div><div class="room-lamp"><i></i><b></b><span></span></div><img class="room-prop room-prop-shelf" src="room-prop-shelf-v1.webp" alt="紫色书架"><div class="room-outfit"><i></i><b></b></div><div class="room-plant"><i></i><b></b><span></span></div><div class="room-rug"></div><div class="room-pouf"></div><button type="button" class="room-monster" data-companion-action="play-monster" aria-label="戳一戳房间里的小紫怪"><span class="monster-shadow"></span>${monster}</button><div class="room-crown">♛</div><div class="room-speech" aria-live="polite">${theme ? escape(theme.label) : '戳戳我，我会动哦'}</div></div><div class="room-gallery"><div class="room-gallery-head"><div><h3>房间照片墙</h3><p>从相册挑喜欢的照片放进小房间，最多 12 张。</p></div><label class="photo-upload">从相册选择<input type="file" accept="image/jpeg,image/png,image/webp" data-room-upload></label></div><label class="photo-caption">给照片写一句话（可不写）<input maxlength="120" data-room-caption placeholder="例如：今天让我开心的小事情"></label><div class="room-photos">${photos || '<p class="room-photo-empty">照片墙还是空的，第一张由你来选。</p>'}</div></div></section>`;
   }
 
   function milestonesHTML() {
@@ -128,6 +158,14 @@
     const button = event.target.closest('[data-companion-action]'); if (!button) return;
     const action = button.dataset.companionAction;
     if (action === 'close-letter') { button.closest('.surprise-modal')?.remove(); return; }
+    if (action === 'play-monster') {
+      const room = button.closest('.monster-room'), speech = room?.querySelector('.room-speech');
+      room?.classList.remove('monster-playing'); void room?.offsetWidth; room?.classList.add('monster-playing');
+      const phrases = festivalPhrases[room?.dataset.roomTheme] || monsterPhrases;
+      if (speech) { speech.textContent = phrases[Math.floor(Math.random() * phrases.length)]; speech.classList.add('show'); }
+      setTimeout(() => { room?.classList.remove('monster-playing'); speech?.classList.remove('show'); }, 2200);
+      return;
+    }
     if (action === 'open-surprise') {
       button.disabled = true; button.textContent = '正在拆信…';
       try { const result = await root.LynnSync.openSurprise(button.dataset.id); cloud.surprises = cloud.surprises.filter(item => item.id !== result.letter.id); inject(); showLetter(result.letter); }
