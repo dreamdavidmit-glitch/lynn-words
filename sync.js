@@ -12,6 +12,7 @@
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let model, getState, applyState, getPresence, notify, timer = 0, presenceTimer = 0, claimOpenTimer = 0, ready = false, busy = false, pendingRemote = null, adminMode = '', adminSnapshots = null, snapshotPreview = null;
+  let queuedPush = false;
   let accessToken = '', accessRequired = false, accessResolve = null;
   let lastInteractionAt = Date.now();
   let status = {kind: 'disconnected', text: '仅保存在本机'};
@@ -98,14 +99,25 @@
 
   async function api(path, options = {}) {
     const {auth = true, tokenOverride = '', ...fetchOptions} = options;
+    const requestToken = token();
     const headers = new Headers(fetchOptions.headers || {});
     if (tokenOverride) headers.set('Authorization', `Bearer ${tokenOverride}`);
-    else if (auth && token()) headers.set('Authorization', `Bearer ${token()}`);
+    else if (auth && requestToken) headers.set('Authorization', `Bearer ${requestToken}`);
     const response = await fetch(ENDPOINT + path, {...fetchOptions, headers});
-    if (response.status === 401 && auth && !tokenOverride) {
-      accessToken = ''; ready = false; accessRequired = true; setStatus('disconnected', '请输入同步密码'); open();
+    if (response.status === 401 && auth && !tokenOverride && requestToken === token()) {
+      accessToken = ''; ready = false; pendingRemote = null; accessRequired = true; setStatus('disconnected', '请输入同步密码'); open();
     }
     return response;
+  }
+
+  async function roomLive(body,{leave=false}={}) {
+    if (!token()) throw new Error('请先登录。');
+    const response=await api('/room/live',{
+      method:leave ? 'DELETE' : 'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body),keepalive:leave,signal:leave ? undefined : AbortSignal.timeout(6000)
+    });
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
   }
 
   async function errorMessage(response) {
@@ -158,9 +170,17 @@
     return response.json();
   }
 
-  async function uploadRoomPhoto(blob, caption = '') {
+  async function submitRoomWish(body, requestKey) {
+    const response = await api('/room/wishes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({body,requestKey})});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
+  async function uploadRoomPhoto(blob, caption = '', takenAt = null) {
     if (!token()) throw new Error('先连接云端进度，才能把照片放进房间。');
-    const response = await api('/room/photos', {method:'POST', headers:{'Content-Type':blob.type || 'image/jpeg', 'X-Photo-Caption':encodeURIComponent(String(caption).slice(0, 120))}, body:blob});
+    const headers = {'Content-Type':blob.type || 'image/jpeg', 'X-Photo-Caption':encodeURIComponent(String(caption).slice(0, 120))};
+    if (takenAt) headers['X-Photo-Taken-At'] = takenAt;
+    const response = await api('/room/photos', {method:'POST', headers, body:blob});
     if (!response.ok) throw new Error(await errorMessage(response));
     return response.json();
   }
@@ -174,11 +194,33 @@
     return blob;
   }
 
+  async function roomPhotoNotes(id,before) {
+    const response=await api(`/room/photos/${Number(id)}/notes`+(before ? '?before='+before : ''));
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+  async function postRoomPhotoNote(id,body,clientId) {
+    const response=await api(`/room/photos/${Number(id)}/notes`,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,clientId})
+    });
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
   async function removeRoomPhoto(id) {
     const response = await api(`/room/photos/${Number(id)}`, {method:'DELETE'});
     if (!response.ok) throw new Error(await errorMessage(response));
     return response.json();
   }
+
+  async function patchRoomPhoto(id, changes) {
+    const response = await api(`/room/photos/${Number(id)}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(changes)});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  }
+
+  const updateRoomPhotoLayout = (id, wallSlot, frameStyle) => patchRoomPhoto(id,{wallSlot,frameStyle});
+  const updateRoomPhotoDate = (id, takenAt) => patchRoomPhoto(id,{takenAt});
 
   async function readRemote() {
     const response = await api('/state');
@@ -218,27 +260,46 @@
   }
 
   async function push(state, baseRevision, force = false) {
-    if (!token() || busy || (!ready && !force)) return false;
-    busy = true; clearTimeout(timer); timer = 0; setStatus('syncing', '正在同步…');
+    const requestToken = token();
+    if (!requestToken || pendingRemote || (!ready && !force)) return false;
+    if (busy) { queuedPush = true; return false; }
+    busy = true; queuedPush = false; clearTimeout(timer); timer = 0;
+    setStatus('syncing', '正在同步…');
     try {
       const text = payloadFor(state), hash = await digest(text), old = meta();
+      if (requestToken !== token()) return false;
       if (!force && old.lastHash === hash) { setStatus('synced', `已同步 ${friendlyTime(old.lastSyncAt)}`); return true; }
       const encoded = await encodePayload(text);
+      if (requestToken !== token()) return false;
       const response = await api('/state', {method: 'PUT', body: encoded.body, headers: {
         'Content-Type': 'application/octet-stream', 'X-Base-Revision': String(baseRevision),
         'X-Device-Id': deviceId(), 'X-Payload-Encoding': encoded.encoding
       }});
+      if (requestToken !== token()) return false;
       if (response.status === 409) {
-        pendingRemote = await readRemote();
+        const remote = await readRemote();
+        if (requestToken !== token()) return false;
+        if (!remote) throw new Error('暂时读不到另一台设备的进度，请重试。');
+        pendingRemote = remote;
         setStatus('conflict', '发现另一台设备的进度', '点这里选择保留哪一份'); open(); return false;
       }
       if (!response.ok) throw new Error(await errorMessage(response));
-      const result = await response.json(); saveRemoteMeta(result, hash); return true;
+      const result = await response.json();
+      if (requestToken !== token()) return false;
+      saveRemoteMeta(result, hash);
+      return true;
     } catch (error) {
-      const signedOut = !token();
-      setStatus(signedOut ? 'disconnected' : navigator.onLine ? 'error' : 'offline', signedOut ? '请重新连接云端' : navigator.onLine ? '同步失败，点此重试' : '离线中，本机已保存', error.message);
+      if (requestToken === token()) {
+        setStatus(navigator.onLine ? 'error' : 'offline', navigator.onLine ? '同步失败，点此重试' : '离线中，本机已保存', error.message);
+      }
       return false;
-    } finally { busy = false; }
+    } finally {
+      busy = false;
+      if (queuedPush) {
+        queuedPush = false;
+        if (navigator.onLine) schedule(null, true);
+      }
+    }
   }
 
   async function reconcile(localState, firstConnection = false) {
@@ -372,19 +433,52 @@
 
   function close() { root.document?.querySelector('.sync-modal')?.remove(); root.document?.body?.classList.remove('sync-open'); }
 
-  function schedule(state, immediate = false) {
-    if (state) currentState = state;
-    if (!token() || !ready) return;
-    clearTimeout(timer); timer = setTimeout(() => push(getState(), meta().revision || 0), immediate ? 80 : 8000);
+  function schedule(_state, immediate = false) {
+    if (!token() || !ready || pendingRemote) return;
+    if (busy) { queuedPush = true; return; }
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = 0;
+      push(getState(), meta().revision || 0);
+    }, immediate ? 80 : 8000);
   }
 
-  let currentState = null;
-  async function bootstrap(state) {
-    currentState = state; accessToken = ''; storage.remove(LEGACY_TOKEN_KEY); renderBadge();
+  async function bootstrap() {
+    accessToken = ''; storage.remove(LEGACY_TOKEN_KEY); renderBadge();
     accessRequired = true;
     setStatus('disconnected', claimTokenFromURL() ? '完成首次云端设置' : '请输入同步密码');
     open();
     return new Promise(resolve => { accessResolve = resolve; });
+  }
+
+  async function resolveConflict(action, button) {
+    if (!pendingRemote || busy) return;
+    const remote = pendingRemote, requestToken = token();
+    for (const choice of button.parentElement.querySelectorAll('button')) choice.disabled = true;
+    try {
+      if (action === 'use-cloud') {
+        const hash = await digest(remote.text);
+        if (requestToken !== token()) return;
+        await applyState(remote.state);
+        if (requestToken !== token()) return;
+        pendingRemote = null;
+        saveRemoteMeta(remote, hash);
+        notify('已经使用云端进度 ✓');
+      } else {
+        if (action === 'merge') await applyState(model.mergeStates(getState(), remote.state));
+        if (requestToken !== token()) return;
+        pendingRemote = null;
+        if (!await push(getState(), remote.revision, true)) {
+          if (requestToken === token() && !pendingRemote) { pendingRemote = remote; open(); }
+          return;
+        }
+        notify(action === 'merge' ? '两台设备的学习记录已经合并 ✓' : '这台设备的进度已上传 ✓');
+      }
+      close();
+    } catch (error) {
+      if (requestToken === token()) open();
+      notify(error.message);
+    }
   }
 
   function init(options) {
@@ -414,9 +508,7 @@
       }
       else if (action === 'sync-now') { push(getState(), meta().revision || 0, true).then(ok => { if (ok) { close(); notify('云端进度同步好啦 ✓'); } }); }
       else if (action === 'restore') { readRemote().then(async remote => { if (!remote) throw new Error('云端还没有进度。'); await applyState(remote.state); saveRemoteMeta(remote, await digest(remote.text)); close(); notify('已经恢复到云端进度 ✓'); }).catch(error => notify(error.message)); }
-      else if (action === 'use-cloud') { const remote = pendingRemote; pendingRemote = null; applyState(remote.state).then(async () => { saveRemoteMeta(remote, await digest(remote.text)); close(); notify('已经使用云端进度 ✓'); }); }
-      else if (action === 'use-device') { const revision = pendingRemote.revision; pendingRemote = null; push(getState(), revision, true).then(ok => { if (ok) { close(); notify('这台设备的进度已上传 ✓'); } }); }
-      else if (action === 'merge') { const remote = pendingRemote, merged = model.mergeStates(getState(), remote.state); pendingRemote = null; button.disabled = true; button.textContent = '正在合并…'; applyState(merged).then(() => push(merged, remote.revision, true)).then(ok => { if (ok) { close(); notify('两台设备的学习记录已经合并 ✓'); } }).catch(error => notify(error.message)); }
+      else if (['use-cloud', 'use-device', 'merge'].includes(action)) resolveConflict(action, button);
     });
     root.document.addEventListener('submit', event => {
       const form = event.target.closest('[data-sync-form]'); if (!form) return; event.preventDefault();
@@ -438,7 +530,8 @@
           if (!pendingRemote) close();
           resolve(next);
         } else {
-          accessRequired = false; close();
+          accessRequired = false;
+          if (!pendingRemote) close();
           if (next !== getState()) await applyState(next);
         }
         reportPresence('online');
@@ -456,5 +549,5 @@
     clearInterval(presenceTimer); presenceTimer = root.setInterval(() => { if (!root.document.hidden) reportPresence('online'); }, 55_000);
   }
 
-  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, messages, reply, companion, saveMood, openSurprise, uploadRoomPhoto, roomPhoto, removeRoomPhoto, connected: () => !!token(), status: () => ({...status})};
+  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, messages, reply, companion, saveMood, openSurprise, submitRoomWish, uploadRoomPhoto, roomPhoto, roomPhotoNotes, postRoomPhotoNote, removeRoomPhoto, updateRoomPhotoLayout, updateRoomPhotoDate, roomLive, connected: () => !!token(), status: () => ({...status})};
 })(typeof window !== 'undefined' ? window : globalThis);

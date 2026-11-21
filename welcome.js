@@ -126,13 +126,13 @@
     })[character]);
   }
 
-  function showRelease(release, onClose) {
+  function showRelease(release, onClose, {force = false} = {}) {
     if (!release?.id || !root.document || root.document.querySelector('.daily-welcome')) return false;
     if (release.level === 'minor') {
-      try { root.localStorage?.setItem(RELEASE_STORAGE_KEY, release.id); } catch (_) {}
+      try { if (!force) root.localStorage?.setItem(RELEASE_STORAGE_KEY, release.id); } catch (_) {}
       return false;
     }
-    try { if (root.localStorage?.getItem(RELEASE_STORAGE_KEY) === release.id) return false; }
+    try { if (!force && root.localStorage?.getItem(RELEASE_STORAGE_KEY) === release.id) return false; }
     catch (_) {}
     const reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const previousFocus = root.document.activeElement;
@@ -173,7 +173,7 @@
     const close = () => {
       if (closed) return;
       closed = true;
-      try { root.localStorage?.setItem(RELEASE_STORAGE_KEY, release.id); }
+      try { if (!force) root.localStorage?.setItem(RELEASE_STORAGE_KEY, release.id); }
       catch (_) {}
       layer.classList.add('is-leaving');
       root.document.body.classList.remove('welcome-open');

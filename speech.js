@@ -9,17 +9,24 @@
   const fileFor=word=>{if(!index)return null;const hit=index[String(word).toLowerCase()];return typeof hit==='string'?hit:hit?.file||null;};
   function warmAudio(word){
     const path=fileFor(word);if(!path)return null;
-    if(warm.has(path))return warm.get(path);
+    if(warm.has(path)){
+      const cached=warm.get(path);
+      warm.delete(path);warm.set(path,cached);
+      return cached;
+    }
     const audio=new Audio('audio/'+path);audio.setAttribute('playsinline','');audio.preload='auto';
     try{audio.load();}catch(_){}
     warm.set(path,audio);
-    while(warm.size>48){const first=warm.keys().next().value;if(warm.get(first)!==player)warm.delete(first);else break;}
+    if(warm.size>48){
+      const oldest=[...warm].find(([,cached])=>cached!==player);
+      if(oldest)warm.delete(oldest[0]);
+    }
     return audio;
   }
   const api={
     stop(){seq++;if(player){try{player.pause();}catch(_){}player=null;}try{window.speechSynthesis?.cancel();}catch(_){}},
     voices(){try{return window.speechSynthesis?.getVoices().filter(v=>/^en/i.test(v.lang))||[];}catch(_){return [];}},
-    async prefetch(words){if(fileMode)return;try{if(!index)await loading;(words||[]).slice(0,24).forEach(warmAudio);}catch(_){}},
+    async prefetch(words){if(fileMode||navigator.connection?.saveData)return;try{if(!index)await loading;(words||[]).slice(0,24).forEach(warmAudio);}catch(_){}},
     cacheInfo(){return {indexReady:!!index,warmed:warm.size};},
     async speak(word,options={}){
       api.stop();const token=seq;
