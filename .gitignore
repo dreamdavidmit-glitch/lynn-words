@@ -4,3 +4,4 @@ cloudflare/.wrangler/
 cloudflare/.dev.vars
 qa-output/
 /festival-*.png
+/room3d.assets.local.js
