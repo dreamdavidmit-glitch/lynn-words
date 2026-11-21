@@ -6,6 +6,9 @@
   let messages = [];
   let loading = false;
   let error = '';
+  let sending = false;
+  let sendError = '';
+  let generation = 0;
 
   const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
   const token = () => { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (_) { return ''; } };
@@ -30,7 +33,7 @@
   }
 
   function panelHTML() {
-    return `<section class="paper-panel owner-chat-panel"><div class="owner-chat-heading"><div><span>LEAVE A LITTLE NOTE</span><h2>给 Lynn 的留言</h2><p>她不在线也没关系，留言会留在小词窝；她的回复也会回到这里。</p></div><i>💌</i></div>${error ? `<div class="site-warning">${escape(error)}</div>` : ''}<div class="owner-chat-thread">${threadHTML()}</div><form class="owner-chat-form"><textarea name="body" maxlength="500" rows="2" placeholder="写一句想留给 Lynn 的话…" aria-label="留言内容" required></textarea><button type="submit" ${loading ? 'disabled' : ''}>${loading ? '正在送信…' : '送进小词窝'}<span>→</span></button></form><small class="owner-chat-hint">最多 500 字 · 离线留言会一直保留 · 只有你和 Lynn 可以看到</small></section>`;
+    return `<section class="paper-panel owner-chat-panel"><div class="owner-chat-heading"><div><span>LEAVE A LITTLE NOTE</span><h2>给 Lynn 的留言</h2><p>她不在线也没关系，留言会留在小词窝；她的回复也会回到这里。</p></div><i>💌</i></div><div class="site-warning" role="status" hidden></div><div class="owner-chat-thread">${threadHTML()}</div><form class="owner-chat-form"><textarea name="body" rows="2" placeholder="写一句想留给 Lynn 的话…" aria-label="留言内容" required></textarea><button type="submit" ${loading ? 'disabled' : ''}>${loading ? '正在送信…' : '送进小词窝'}<span>→</span></button></form><small class="owner-chat-hint">本浏览器自动留存草稿 · 只有你和 Lynn 可以看到</small></section>`;
   }
 
   function inject() {
@@ -38,16 +41,27 @@
     const target = content?.querySelector('.sites-panel') || content?.querySelector('.dashboard-grid');
     if (!content || !target) return;
     let panel = content.querySelector('.owner-chat-panel');
-    if (!panel) { panel = document.createElement('section'); target.before(panel); }
-    const wrapper = document.createElement('div'); wrapper.innerHTML = panelHTML(); panel.replaceWith(wrapper.firstElementChild);
-    const thread = content.querySelector('.owner-chat-thread'); if (thread) thread.scrollTop = thread.scrollHeight;
+    if (!panel) {
+      target.insertAdjacentHTML('beforebegin',panelHTML());
+      panel = content.querySelector('.owner-chat-panel');
+      LynnLetters.mount(panel.querySelector('form'),'owner');
+    }
+    const status = panel.querySelector('.site-warning');
+    status.textContent = sendError || error;
+    status.hidden = !status.textContent;
+    panel.querySelector('textarea').readOnly = sending;
+    const button = panel.querySelector('button[type="submit"]');
+    button.disabled = sending;
+    button.firstChild.textContent = sending ? '正在送信…' : '送进小词窝';
+    LynnLetters.updateThread(panel.querySelector('.owner-chat-thread'),threadHTML());
   }
 
   async function load() {
-    if (!token() || loading) return;
+    if (!token() || loading || sending) return;
+    const id = ++generation;
     loading = true; error = ''; inject();
-    try { const result = await api('/care/messages?read=1'); messages = result.messages || []; }
-    catch (reason) { error = reason.message || '暂时收不到留言。'; }
+    try { const result = await api('/care/messages?read=1'); if (id === generation) messages = result.messages || []; }
+    catch (reason) { if (id === generation) error = reason.message || '暂时收不到留言。'; }
     finally { loading = false; inject(); }
   }
 
@@ -58,13 +72,16 @@
     if (!form) return;
     event.preventDefault();
     const body = String(new FormData(form).get('body') || '').trim();
-    if (!body || loading) return;
-    loading = true; error = ''; inject();
+    if (!body || sending) return;
+    const submittedDraft = LynnLetters.read('owner');
+    sending = true; sendError = ''; generation++; inject();
     try {
-      await api('/care/messages', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({body})});
-      const result = await api('/care/messages?read=1'); messages = result.messages || [];
-    } catch (reason) { error = reason.message || '留言没有送出去，请再试一次。'; }
-    finally { loading = false; inject(); }
+      const result = await api('/care/messages', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({body})});
+      if (result.message) messages = [...messages.filter(m=>m.id!==result.message.id),result.message];
+      LynnLetters.clear('owner', submittedDraft);
+      form.reset();
+    } catch (reason) { sendError = reason.message || '留言没有送出去，请再试一次。'; }
+    finally { sending = false; inject(); }
   });
 
   document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });

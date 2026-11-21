@@ -3,8 +3,8 @@
 // 词典分片和识别组件体积大、基本不变，用缓存优先。
 // 读音 mp3 不经过这里，交给浏览器自己处理（iPad Safari 播放音频需要分段请求）。
 // 如果以后改了 dictionary/ 或 vendor/ 里的文件，把下面的 VERSION 改一下即可清掉旧缓存。
-const VERSION = 'lynn-v35-20261116-room-photo-release';
-const CORE = ['./', 'index.html', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'sync.js', 'messages.js', 'companion.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'festival.js', 'release.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'mascot-room-3d-v1.webp', 'mascot-room-3d-blink-v1.webp', 'room-bg-3d-v2.webp', 'room-prop-lantern-v1.webp', 'assets/room/bed-ai-v1.webp', 'assets/room/crown-ai-v1.webp', 'assets/room/lamp-ai-v1.webp', 'assets/room/outfit-rack-ai-v1.webp', 'assets/room/plant-ai-v1.webp', 'assets/room/rug-ai-v1.webp', 'assets/room/shelf-ai-v1.webp', 'assets/room/window-curtains-ai-v2.webp', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
+const VERSION = 'lynn-v92-joystick-album';
+const CORE = ['./', 'index.html', 'opening-countdown.js?v=1', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'sync.js', 'letter-drafts.js', 'messages.js', 'companion.js', 'room-photo-dates.js', 'room-album.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'festival.js', 'release.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(VERSION)
@@ -64,6 +64,6 @@ self.addEventListener('fetch', event => {
   const path = url.pathname;
   if (/\/care(?:-[^/]+)?(?:\.html|\.css|\.js)?$/i.test(path)) return;
   if (/\/audio\/[^/]+\.mp3$/i.test(path) || /\/photo\.(?:jpe?g|png|webp)$/i.test(path) || /\/sw\.js$/.test(path)) return;
-  if (/\/(?:dictionary|vendor)\//.test(path)) { event.respondWith(cacheFirst(request)); return; }
+  if (/\/(?:dictionary|vendor|assets\/models\/room-character|assets\/room\/photo-valley)\//.test(path)) { event.respondWith(cacheFirst(request)); return; }
   event.respondWith(networkFirst(request));
 });
