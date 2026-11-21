@@ -1,0 +1,7 @@
+.david-room-page{max-width:1520px;margin:auto;padding:clamp(12px,3vw,34px)}
+.david-room-page header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.david-room-page h1{margin:0;color:var(--ink,#49384c);font:600 clamp(20px,3vw,34px)/1.2 Georgia,'Microsoft YaHei',serif}
+.david-room-page header a{color:#65487e;font-weight:700;font-size:14px;padding:7px 9px;text-underline-offset:4px}
+.david-room{height:min(78svh,840px);min-height:350px;aspect-ratio:auto}
+.david-room-message{position:absolute;inset:0;display:grid;place-items:center;padding:2ch;text-align:center;background:#ede5f0;color:#513b60}
+.david-room-message[hidden]{display:none}

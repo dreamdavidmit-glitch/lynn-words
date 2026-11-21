@@ -43,7 +43,7 @@
   function recordMood(state, level, note = '', now = Date.now()) {
     checkStamp(now);
     if (!['tired', 'okay', 'good'].includes(level)) throw new Error('请选择今天的心情。');
-    const text = cleanText(note, 200, '今日心情');
+    const text = cleanText(note, Infinity, '今日心情');
     if (!isRecord(state.moodLog)) state.moodLog = {};
     const date = day(now);
     state.moodLog[date] = {level, note: text, createdAt: now};
@@ -119,60 +119,142 @@
     if (w.delayedDueAt !== null) { w.shortDelayMs = settingsDelay(settings); w.delayedDueAt = now + w.shortDelayMs; }
     return reviewInfo(deck, id, now);
   }
+  function shortReviewAt(w) {
+    return w.delayedDueAt == null ? null : Math.max(w.delayedDueAt,(w.lastSeenAt ?? 0)+w.shortDelayMs);
+  }
+  function dueOnDay(w,today,now) {
+    return !!w.due && w.due<=today && !(w.repetitions===0 && w.lastLapseDate===today && shortReviewAt(w)>now);
+  }
   function answer(deck, id, right, settings = DEFAULT_SETTINGS, now = Date.now(), meta = {}) {
     checkStamp(now); if (typeof right !== 'boolean') throw new Error('答题结果必须是对或错。');
     const delay = settingsDelay(settings), today = day(now), w = wordState(deck, id);
-    const previousScheduled = w.lastScheduled, previouslyDue = validDay(w.due) && w.due <= today;
+    const previouslyDue=dueOnDay(w,today,now);
     const gap = w.lastSeenAt === null ? null : now - w.lastSeenAt;
-    const shortReady = w.delayedDueAt !== null && now >= w.delayedDueAt && gap !== null && gap >= w.shortDelayMs;
+    const shortAt=shortReviewAt(w), shortReady=shortAt!==null && now>=shortAt;
+    const longReady=previouslyDue && w.repetitions>0 && w.lastScheduled && w.lastScheduled<today &&
+      gap!==null && gap>=LONG_TERM_GAP_MS && !meta.repair;
     markSeen(w, now); w.attempts++; w.correct += right ? 1 : 0; w.wrong += right ? 0 : 1;
     const responseMs = Number.isFinite(meta.responseMs) ? Math.max(0, Math.min(10 * 60 * 1000, Math.round(meta.responseMs))) : null;
     if (responseMs !== null) { w.lastResponseMs = responseMs; w.slowStreak = responseMs >= SLOW_RESPONSE_MS ? Math.min(1000, w.slowStreak + 1) : Math.max(0, w.slowStreak - (right ? 1 : 0)); }
     w.errorStreak = right ? 0 : Math.min(1000, w.errorStreak + 1);
     if (!isRecord(w.confusions)) w.confusions = {};
-    if (!right && safeId(meta.confusedWith) && meta.confusedWith !== id && deck.words.some(item => item.id === meta.confusedWith)) w.confusions[meta.confusedWith] = Math.min(1000, (w.confusions[meta.confusedWith] || 0) + 1);
+    if (!right && safeId(meta.confusedWith) && meta.confusedWith !== id && deck.words.some(item => item.id === meta.confusedWith)) {
+      const known=Object.keys(w.confusions);
+      if (!own(w.confusions,meta.confusedWith) && known.length>=100) {
+        const weakest=known.reduce((a,b)=>w.confusions[a]<=w.confusions[b] ? a : b);
+        delete w.confusions[weakest];
+      }
+      w.confusions[meta.confusedWith]=Math.min(1000,(w.confusions[meta.confusedWith] || 0)+1);
+    }
     if (right) for (const other of Object.keys(w.confusions)) { w.confusions[other] = Math.max(0, w.confusions[other] - 1); if (!w.confusions[other]) delete w.confusions[other]; }
     if (!right) {
-      if (w.lastLapseDate !== today) { w.ease = Math.max(1.3, Math.round((w.ease - 0.54) * 100) / 100); w.lapses++; w.lastLapseDate = today; }
-      w.repetitions = 0; w.intervalDays = 0; w.due = today; w.lastScheduled = null;
-      w.lastSeenAt = now; w.shortDelayMs = delay; w.delayedDueAt = now + delay;
-    } else if (w.lastScheduled !== today && (!w.due || w.due <= today)) {
-      if (w.repetitions > 0 && gap !== null && gap < LONG_TERM_GAP_MS) {
-        w.intervalDays = 1; w.repetitions = 1; w.shortDelayMs = delay; w.delayedDueAt = now + delay;
-      } else {
-        w.intervalDays = w.repetitions === 0 ? 1 : w.repetitions === 1 ? 6 : Math.min(36500, Math.ceil(w.intervalDays * w.ease));
-        w.repetitions++;
+      if (w.lastLapseDate !== today) {
+        w.ease=Math.max(1.3,Math.round((w.ease-.24)*100)/100);
+        w.lapses++;
+        w.lastLapseDate=today;
       }
-      w.due = addDays(today, w.intervalDays); w.lastScheduled = today;
+      w.repetitions=0;
+      w.intervalDays=0;
+      w.due=addDays(today,1);
+      w.lastScheduled=null;
+      w.checkedAt=null;
+      w.shortDelayMs=delay;
+      w.delayedDueAt=now+delay;
+    } else {
+      if (longReady) {
+        const slow=responseMs!==null && responseMs>=SLOW_RESPONSE_MS;
+        const fast=responseMs!==null && responseMs>=650 && responseMs<=4500;
+        const delta=slow ? -.12 : fast ? .08 : 0;
+        w.ease=Math.max(1.3,Math.min(3,Math.round((w.ease+delta)*100)/100));
+        const recentLapse=w.lastLapseDate && daysBetween(w.lastLapseDate,today)<=7;
+        const growth=slow ? Math.min(1.45,w.ease) : w.ease;
+        const lateDays=Math.max(0,daysBetween(w.due,today));
+        const credit=slow ? 0 : Math.min(w.intervalDays*.20,lateDays*.20);
+        w.intervalDays=w.repetitions===1
+          ? Math.max(2,Math.min(7,Math.round(w.ease*2.4)-(slow ? 2 : 0)-(recentLapse ? 1 : 0)))
+          : Math.min(36500,Math.ceil((Math.max(1,w.intervalDays)+credit)*growth));
+        w.repetitions++;
+        w.due=addDays(today,w.intervalDays);
+        w.lastScheduled=today;
+        if (w.lastLongTermSuccessDate!==today) { w.longTermSuccesses++; w.lastLongTermSuccessDate=today; }
+      } else if (!w.repetitions || previouslyDue) {
+        if (!w.repetitions) { w.repetitions=1; w.intervalDays=1; }
+        // Recent exposure confirms recollection, but cannot lengthen the interval.
+        w.due=addDays(today,1);
+        w.lastScheduled=today;
+      }
+      if (shortReady) { w.checkedAt=now; w.delayedDueAt=null; }
+      else if (shortAt!==null || w.checkedAt===null) {
+        w.shortDelayMs=delay;
+        w.delayedDueAt=now+delay;
+      }
     }
-    if (right) {
-      if (shortReady) { w.checkedAt = now; w.delayedDueAt = null; }
-      else if (w.checkedAt === null && w.delayedDueAt === null) { if (w.lastSeenAt === null) w.lastSeenAt = now; w.shortDelayMs = delay; w.delayedDueAt = now + delay; }
-      if (previouslyDue && previousScheduled && previousScheduled < today && gap !== null && gap >= LONG_TERM_GAP_MS && w.lastLongTermSuccessDate !== today) { w.longTermSuccesses++; w.lastLongTermSuccessDate = today; }
-    }
+    w.lastSeenAt=now;
     w.lastReviewed = today;
     return reviewInfo(deck, id, now);
   }
   function reviewInfo(deck, id, now = Date.now()) {
     const w = own(deck.progress, id) ? deck.progress[id] : freshProgress(), today = day(now);
     const daysUntil = validDay(w.due) ? daysBetween(today, w.due) : null;
-    const isDayDue = daysUntil !== null && daysUntil <= 0, isShortDue = w.delayedDueAt !== null && now >= w.delayedDueAt;
+    const shortDueAt=shortReviewAt(w);
+    const isDayDue=dueOnDay(w,today,now), isShortDue=shortDueAt!==null && now>=shortDueAt;
     const overdueDays = daysUntil === null ? 0 : Math.max(0, -daysUntil), isDue = isDayDue || isShortDue;
-    return {due: w.due, isDue, isDayDue, isShortDue, shortDueAt: w.delayedDueAt, shortMinutesUntil: w.delayedDueAt === null ? null : Math.max(0, Math.ceil((w.delayedDueAt - now) / 60000)), checkedAt: w.checkedAt, daysUntil, overdueDays, intervalDays: w.intervalDays, repetitions: w.repetitions, ease: w.ease, lapses: w.lapses, longTermSuccesses: w.longTermSuccesses, priority: isDue ? 100000 + overdueDays * 100 + (isShortDue ? 50 : 0) + Math.min(49, w.lapses * 3 + w.wrong) : -1};
+    return {due: w.due, isDue, isDayDue, isShortDue, shortDueAt, shortMinutesUntil: shortDueAt===null ? null : Math.max(0, Math.ceil((shortDueAt-now)/60000)), checkedAt: w.checkedAt, daysUntil, overdueDays, intervalDays: w.intervalDays, repetitions: w.repetitions, ease: w.ease, lapses: w.lapses, longTermSuccesses: w.longTermSuccesses, priority: isDue ? 100000 + overdueDays * 100 + (isShortDue ? 50 : 0) + Math.min(49, w.lapses * 3 + w.wrong) : -1};
   }
   function dueWords(deck, now = Date.now()) {
-    return deck.words.filter(w => w.meaning.trim()).map(word => ({word, info: reviewInfo(deck, word.id, now)})).filter(x => x.info.isDue).sort((a, b) => b.info.priority - a.info.priority || (deck.progress[a.word.id]?.lastSeenAt || 0) - (deck.progress[b.word.id]?.lastSeenAt || 0)).map(x => x.word);
+    const today=day(now), due=[];
+    for (const word of deck.words) {
+      const w=deck.progress[word.id];
+      if (!w || !word.meaning.trim()) continue;
+      const short=shortReviewAt(w);
+      if (!dueOnDay(w,today,now) && (short===null || short>now)) continue;
+      due.push({word,priority:reviewInfo(deck,word.id,now).priority,last:w.lastSeenAt || 0});
+    }
+    return due.sort((a,b)=>b.priority-a.priority || a.last-b.last).map(item=>item.word);
+  }
+  function reviewBatch(deck,limit=20,now=Date.now()) {
+    const due=dueWords(deck,now);
+    if (due.length<=limit) return due;
+    const short=due.filter(word=>{
+      const at=shortReviewAt(deck.progress[word.id]);
+      return at!==null && at<=now;
+    }).sort((a,b)=>shortReviewAt(deck.progress[a.id])-shortReviewAt(deck.progress[b.id]));
+    const reserved=new Set(short.slice(0,Math.floor(limit/3)));
+    return [...reserved,...due.filter(word=>!reserved.has(word)).slice(0,limit-reserved.size)];
   }
   function stats(deck, settings = DEFAULT_SETTINGS, now = Date.now()) {
-    const today = day(now), config = validatedSettings(settings), progress = deck.words.map(w => deck.progress[w.id]).filter(Boolean);
-    const seen = progress.filter(w => w.seen).length, newToday = progress.filter(w => w.firstSeenDate === today).length;
-    const pending = progress.filter(w => w.delayedDueAt !== null && w.delayedDueAt > now).map(w => w.delayedDueAt);
-    return {total: deck.words.length, seen, unseen: deck.words.length - seen, newToday, remainingToday: Math.max(0, config.dailyTarget - newToday), due: dueWords(deck, now).length, delayedPending: pending.length, nextDelayedAt: pending.length ? Math.min(...pending) : null, longTerm: progress.filter(w => w.longTermSuccesses > 0).length, missingMeanings: deck.words.filter(w => !w.meaning.trim()).length, mistakes: progress.filter(w => w.wrong > 0).length};
+    const today=day(now), config=validatedSettings(settings);
+    let seen=0,newToday=0,due=0,delayedPending=0,nextDelayedAt=null,longTerm=0,missingMeanings=0,mistakes=0;
+    for (const word of deck.words) {
+      const usable=Boolean(word.meaning.trim());
+      if (!usable) missingMeanings++;
+      const w=deck.progress[word.id];
+      if (!w) continue;
+      if (w.seen) seen++;
+      if (w.firstSeenDate===today) newToday++;
+      if (w.longTermSuccesses>0) longTerm++;
+      if (w.wrong>0) mistakes++;
+      const short=shortReviewAt(w);
+      if (usable && (dueOnDay(w,today,now) || (short!==null && short<=now))) due++;
+      if (short!==null && short>now) { delayedPending++; nextDelayedAt=Math.min(nextDelayedAt ?? short,short); }
+    }
+    return {total:deck.words.length,seen,unseen:deck.words.length-seen,newToday,
+      remainingToday:Math.max(0,config.dailyTarget-newToday),due,delayedPending,nextDelayedAt,longTerm,missingMeanings,mistakes};
   }
-  function nextNewWords(deck, settings = DEFAULT_SETTINGS, now = Date.now()) { const remaining = stats(deck, settings, now).remainingToday; return deck.words.filter(w => !deck.progress[w.id]?.seen && w.meaning.trim()).slice(0, remaining); }
+  function nextNewWords(deck, settings = DEFAULT_SETTINGS, now = Date.now(), limit = Infinity) {
+    const remaining = Math.min(limit, stats(deck, settings, now).remainingToday), selected = [];
+    if (remaining <= 0) return selected;
+    for (const word of deck.words) {
+      if (!deck.progress[word.id]?.seen && word.meaning.trim()) selected.push(word);
+      if (selected.length >= remaining) break;
+    }
+    return selected;
+  }
   function rescueWords(state, deck, now = Date.now(), limit = 10) {
     if (!deck) return [];
-    const done = new Set(state.dailyLog?.[day(now)]?.rescueDone || []), critical = [], fallback = [];
+    const today=day(now), done=new Set(state.dailyLog?.[today]?.rescueDone || []), critical=[], fallback=[];
+    limit=Math.min(limit,10-done.size);
+    if (limit<=0) return [];
     for (const word of deck.words) {
       const progress = deck.progress[word.id]; if (!progress?.seen || !word.meaning.trim() || done.has(word.id)) continue;
       const confusion = Math.max(0, ...Object.values(progress.confusions || {}).filter(Number.isFinite));
@@ -182,12 +264,15 @@
       if (confusion >= 2) reasons.push('容易混淆');
       const score = reasons.length * 100 + (progress.errorStreak || 0) * 12 + (progress.slowStreak || 0) * 8 + confusion * 10 + progress.lapses * 3 + progress.wrong;
       const item = {word, progress, reasons: reasons.length ? reasons : ['最近答错'], score};
-      if (reasons.length) critical.push(item); else if (progress.wrong > 0) fallback.push(item);
+      if (reasons.length) critical.push(item);
+      else if (progress.errorStreak>0 || (progress.lastLapseDate && daysBetween(progress.lastLapseDate,today)<=7 &&
+        (!progress.lastLongTermSuccessDate || progress.lastLongTermSuccessDate<=progress.lastLapseDate))) fallback.push(item);
     }
     critical.sort((a, b) => b.score - a.score); fallback.sort((a, b) => b.score - a.score);
     const picked = critical.slice(0, limit);
-    if (picked.length < Math.min(5, limit)) picked.push(...fallback.slice(0, Math.min(5, limit) - picked.length));
-    return picked.slice(0, limit);
+    const minimum=Math.min(limit,Math.max(0,5-done.size));
+    if (picked.length < minimum) picked.push(...fallback.slice(0, minimum - picked.length));
+    return picked;
   }
   function markRescueDone(state, ids, now = Date.now()) {
     const entry = dailyEntry(state, now), known = new Set(entry.rescueDone || []);
@@ -202,7 +287,7 @@
     const accuracy = attempts ? correct / attempts : null;
     const activeDays = recent.filter(entry => (entry.activeMs || 0) >= 60000);
     const averageMinutes = activeDays.length ? activeDays.reduce((sum, entry) => sum + entry.activeMs, 0) / activeDays.length / 60000 : 0;
-    const due = deck ? dueWords(deck, now).length : 0;
+    const due = deck ? stats(deck,config,now).due : 0;
     let normal = Math.min(25, Math.max(10, Math.round(config.dailyTarget / 5) * 5));
     if (!attempts) normal = 15;
     else if (accuracy >= .88) normal += 5;
@@ -301,12 +386,23 @@
   }
   function shuffle(items, random = Math.random) { const copy = [...items]; for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
   function meaningTokens(s) { return s.replace(/\([^)]*\)|（[^）]*）/g, '').replace(/\b(?:n|v|vt|vi|adj|adv|prep|conj)\./g, '').split(/[；;，,、\n]/).map(t => t.trim().replace(/的$/, '')).filter(t => t.length >= 2); }
-  function overlap(a, b) { return meaningTokens(a).some(x => meaningTokens(b).some(y => x === y || x.includes(y) || y.includes(x))); }
+  function overlappingTokens(a, b) { return a.some(x => b.some(y => x === y || x.includes(y) || y.includes(x))); }
+  function overlap(a, b) { return overlappingTokens(meaningTokens(a), meaningTokens(b)); }
   function chooseOptions(word, words, random = Math.random) {
     if (!word.meaning?.trim()) return [];
-    const picked = [word], pool = shuffle(words.filter(w => w.id !== word.id && normalizedWord(w.word) !== normalizedWord(word.word) && w.meaning?.trim()), random);
-    for (const w of pool) { if (picked.every(p => p.meaning.trim() !== w.meaning.trim() && !overlap(p.meaning, w.meaning))) picked.push(w); if (picked.length === 4) break; }
-    return shuffle(picked.map(w => ({id: w.id, text: w.meaning})), random);
+    const target = normalizedWord(word.word), pool = words.slice();
+    const picked = [{id:word.id, text:word.meaning, gloss:word.meaning.trim(), tokens:meaningTokens(word.meaning)}];
+    while (pool.length && picked.length < 4) {
+      const i = Math.floor(random() * pool.length), w = pool[i];
+      pool[i] = pool.at(-1); pool.pop();
+      const gloss = w.meaning?.trim();
+      if (!gloss || w.id === word.id || normalizedWord(w.word) === target) continue;
+      if (picked.some(p => p.gloss === gloss || p.id === w.id)) continue;
+      const tokens = meaningTokens(gloss);
+      if (picked.some(p => overlappingTokens(p.tokens, tokens))) continue;
+      picked.push({id:w.id, text:w.meaning, gloss, tokens});
+    }
+    return shuffle(picked.map(({id,text}) => ({id,text})), random);
   }
   function validateProgress(raw) {
     if (!isRecord(raw)) throw new Error('词汇进度损坏。'); const w = freshProgress();
@@ -329,7 +425,7 @@
   }
   function validateSession(raw, words) {
     if (raw == null) return null;
-    if (!isRecord(raw) || !['learn', 'review'].includes(raw.kind) || !['learn', 'quiz', 'repair', 'done'].includes(raw.phase)) throw new Error('未完成练习记录损坏。');
+    if (!isRecord(raw) || !['learn', 'review', 'rescue'].includes(raw.kind) || !['learn', 'quiz', 'repair', 'done'].includes(raw.phase)) throw new Error('未完成练习记录损坏。');
     const known = new Map(words.map(w => [w.id, w]));
     function ids(value, label, empty = false) { if (!Array.isArray(value) || (!empty && !value.length) || value.length > MAX_DECK_WORDS || value.some(id => !safeId(id) || !known.has(id)) || new Set(value).size !== value.length) throw new Error(label + '中的词汇编号无效。'); return [...value]; }
     const out = {name: cleanText(raw.name ?? '', 300, '练习名称'), kind: raw.kind, phase: raw.phase, primaryIds: ids(raw.primaryIds, '原始练习'), allIds: ids(raw.allIds, '完整练习'), ids: ids(raw.ids, '当前练习'), index: integer(raw.index, 0, raw.phase === 'done' ? raw.ids.length : raw.ids.length - 1, '当前题号')};
@@ -380,7 +476,7 @@
       state.moodLog = {};
       for (const [date, entry] of Object.entries(raw.moodLog)) {
         if (!validDay(date) || !isRecord(entry) || !['tired', 'okay', 'good'].includes(entry.level) || !validStamp(entry.createdAt)) throw new Error('心情记录格式不正确。');
-        state.moodLog[date] = {level: entry.level, note: cleanText(entry.note ?? '', 200, '心情记录'), createdAt: entry.createdAt};
+        state.moodLog[date] = {level: entry.level, note: cleanText(entry.note ?? '', Infinity, '心情记录'), createdAt: entry.createdAt};
       }
     }
     return state;
@@ -424,7 +520,7 @@
     });
     saveQueue = operation; return operation;
   }
-  const api = {VERSION, APP_ID, DB_NAME, DEFAULT_SETTINGS, LONG_TERM_GAP_MS, SLOW_RESPONSE_MS, day, addDays, markStudyDay, streak, recordStudyTime, recordDailyAnswer, recordMood, recommendDailyPlans, dailyPlan, setDailyPlan, weeklyReport, activityCalendar, rescueWords, markRescueDone, mergeStates, validDay, daysBetween, fresh, createDeck, updateDeckWords, wordState, see, answer, reviewInfo, dueWords, nextNewWords, stats, shuffle, overlap, chooseOptions, validate, validatedSettings, exportBackup, importBackup, load, save};
+  const api = {VERSION, APP_ID, DB_NAME, DEFAULT_SETTINGS, LONG_TERM_GAP_MS, SLOW_RESPONSE_MS, day, addDays, markStudyDay, streak, recordStudyTime, recordDailyAnswer, recordMood, recommendDailyPlans, dailyPlan, setDailyPlan, weeklyReport, activityCalendar, rescueWords, markRescueDone, mergeStates, validDay, daysBetween, fresh, createDeck, updateDeckWords, wordState, see, answer, reviewInfo, dueWords, reviewBatch, nextNewWords, stats, shuffle, overlap, chooseOptions, validate, validatedSettings, exportBackup, importBackup, load, save};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.PublicModel = api;
 })(typeof window !== 'undefined' ? window : globalThis);

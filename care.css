@@ -341,3 +341,24 @@ footer p, footer small { font-size: 9px; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+.letter-draft-note:not([hidden]){display:block;margin:5px 0;color:#705c79;font:500 12px/1.4 system-ui;text-align:right;font-variant-numeric:tabular-nums}
+
+.wish-admin-head,.wish-admin-item>header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.wish-admin-head h2{margin:0;color:#513b67;font-size:22px}
+.wish-admin-head p,.wish-admin-item small{color:#6d6078;font-size:13px}
+.wish-admin-item{padding:14px 0;border-top:1px solid #eadef0}
+.wish-admin-item>header span{font-size:12px;color:#684b84}
+.wish-admin-item p{margin:9px 0;color:#4f3a5f;overflow-wrap:anywhere;white-space:pre-wrap}
+.wish-admin form{display:flex;flex-wrap:wrap;align-items:end;gap:8px}
+.wish-admin form label{display:grid;gap:4px;color:#624b75;font-size:12px}
+.wish-admin input{width:124px;border:1px solid #d5c6df;border-radius:9px;padding:8px;color:#503864}
+.wish-admin button{border:1px solid #d5c6df;background:#f1e8f6;color:#63467a;border-radius:9px;padding:8px 12px;cursor:pointer;font-weight:700}
+.wish-admin button[value="approved"]{background:#755294;color:#fff;border-color:#755294}
+.wish-admin [data-wish-notice]{color:#63467a;font-size:13px;margin:10px 0}
+
+.care-room-link{display:inline-flex;align-items:center;white-space:nowrap;text-decoration:none}
+.care-room-link:hover{text-decoration:underline;text-underline-offset:3px}
+
+.care-mood p,.care-mini-list article strong{white-space:pre-wrap;overflow-wrap:anywhere}
+.care-mini-list article>div{min-width:0}

@@ -14,6 +14,7 @@ const RATE_MAX_FAILURES = 5;
 const RATE_BLOCK_STEPS = [5 * 60, 15 * 60, 60 * 60, 5 * 60 * 60];
 const MAX_MONITORED_SITES = 10;
 const MAX_ROOM_PHOTO = 1_500_000;
+const ROOM_FRAME_STYLES = new Set(['walnut', 'champagne', 'black']);
 
 function bytesToBase64Url(bytes) {
   let binary = '';
@@ -83,7 +84,7 @@ function allowedOrigin(request, env) {
 }
 
 function headers(request, env, extra = {}) {
-  return {'Access-Control-Allow-Origin': allowedOrigin(request, env), 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Base-Revision, X-Device-Id, X-Payload-Encoding, X-Photo-Caption', 'Access-Control-Expose-Headers': 'X-Revision, X-Updated-At, X-Device-Id, X-Payload-Encoding', 'Access-Control-Max-Age': '86400', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', ...extra};
+  return {'Access-Control-Allow-Origin': allowedOrigin(request, env), 'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Base-Revision, X-Device-Id, X-Payload-Encoding, X-Photo-Caption, X-Photo-Taken-At', 'Access-Control-Expose-Headers': 'X-Revision, X-Updated-At, X-Device-Id, X-Payload-Encoding', 'Access-Control-Max-Age': '86400', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', ...extra};
 }
 
 function json(request, env, data, status = 200) {
@@ -241,7 +242,7 @@ async function syncLatestMood(env, state) {
   const entries = Object.entries(state?.moodLog || {}).filter(([date, entry]) => validDay(date) && entry && ['tired', 'okay', 'good'].includes(entry.level));
   if (!entries.length) return;
   entries.sort(([left], [right]) => left.localeCompare(right));
-  const [moodDate, mood] = entries.at(-1), note = typeof mood.note === 'string' ? mood.note.trim().slice(0, 200) : '';
+  const [moodDate, mood] = entries.at(-1), note = typeof mood.note === 'string' ? mood.note.trim() : '';
   const latest = await env.DB.prepare('SELECT level, note FROM moods WHERE mood_date = ? ORDER BY id DESC LIMIT 1').bind(moodDate).first();
   if (latest?.level === mood.level && latest?.note === note) return;
   const createdAt = Number.isFinite(Number(mood.createdAt)) ? new Date(Number(mood.createdAt)).toISOString() : new Date().toISOString();
@@ -266,6 +267,39 @@ async function deliverScheduledMessages(env) {
 async function bodyJSON(request) {
   if (Number(request.headers.get('Content-Length') || 0) > 4096) throw new Error('请求内容过大。');
   return request.json();
+}
+
+class TextRequestError extends Error {
+  constructor(message,status) {
+    super(message);
+    this.status=status;
+  }
+}
+
+async function writtenTextJSON(request) {
+  const tooLarge=()=>new TextRequestError('提交内容超过了服务器的单次传输容量。',413);
+  if (Number(request.headers.get('Content-Length'))>MAX_PAYLOAD) throw tooLarge();
+  const reader=request.body?.getReader();
+  if (!reader) throw new TextRequestError('请填写要提交的内容。',400);
+  const utf8=new TextDecoder();
+  let total=0,text='';
+  while (true) {
+    const {done,value}=await reader.read();
+    if (done) break;
+    total+=value.byteLength;
+    if (total>MAX_PAYLOAD) {
+      await reader.cancel().catch(()=>{});
+      throw tooLarge();
+    }
+    text+=utf8.decode(value,{stream:true});
+  }
+  try {
+    const content=JSON.parse(text+utf8.decode());
+    if (!content || typeof content!=='object' || Array.isArray(content)) throw new Error();
+    return content;
+  } catch (_) {
+    throw new TextRequestError('提交内容的格式不正确。',400);
+  }
 }
 
 function bearer(request) {
@@ -573,8 +607,8 @@ async function messageThread(request, env, role) {
 async function sendMessage(request, env, sender) {
   const authorized = sender === 'owner' ? await careAuthorized(request, env) : await userAuthorized(request, env);
   if (!authorized) return json(request, env, {error: sender === 'owner' ? '请重新验证进入密码。' : '请先连接云端进度。'}, 401);
-  const body = await bodyJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '';
-  if (!text || text.length > 500) return json(request, env, {error:'每条留言需要 1 到 500 个字符。'}, 400);
+  const body = await writtenTextJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '';
+  if (!text) return json(request, env, {error:'请填写留言。'}, 400);
   const createdAt = new Date().toISOString();
   const result = await env.DB.prepare('INSERT INTO messages (sender, body, created_at, read_at) VALUES (?, ?, ?, NULL)').bind(sender, text, createdAt).run();
   await env.DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 300)').run();
@@ -602,9 +636,9 @@ async function careScheduledMessages(request, env) {
     const rows = await env.DB.prepare('SELECT id, body, scheduled_for, created_at, delivered_at FROM scheduled_messages ORDER BY scheduled_for DESC LIMIT 50').all();
     return json(request, env, {messages:(rows.results || []).map(row => ({id:Number(row.id), body:row.body, scheduledFor:row.scheduled_for, createdAt:row.created_at, deliveredAt:row.delivered_at || ''}))});
   }
-  const body = await bodyJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '';
+  const body = await writtenTextJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '';
   const when = typeof body.scheduledFor === 'string' ? new Date(body.scheduledFor) : new Date(NaN);
-  if (!text || text.length > 500) return json(request, env, {error:'定时留言需要 1 到 500 个字符。'}, 400);
+  if (!text) return json(request, env, {error:'请填写定时留言。'}, 400);
   if (!Number.isFinite(when.getTime()) || when.getTime() < Date.now() - 60_000 || when.getTime() > Date.now() + 366 * 86400_000) return json(request, env, {error:'请选择未来一年内的有效投递时间。'}, 400);
   const createdAt = new Date().toISOString(), scheduledFor = when.toISOString();
   const result = await env.DB.prepare('INSERT INTO scheduled_messages (body, scheduled_for, created_at, delivered_at) VALUES (?, ?, ?, NULL)').bind(text, scheduledFor, createdAt).run();
@@ -624,8 +658,8 @@ async function careSurprises(request, env) {
     const rows = await env.DB.prepare('SELECT id, body, gift, unlock_date, created_at, opened_at FROM surprise_letters ORDER BY unlock_date DESC, id DESC LIMIT 50').all();
     return json(request, env, {letters:(rows.results || []).map(row => ({id:Number(row.id), body:row.body, gift:row.gift, unlockDate:row.unlock_date, createdAt:row.created_at, openedAt:row.opened_at || ''}))});
   }
-  const body = await bodyJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '', gift = typeof body.gift === 'string' ? body.gift.trim() : '💜', unlockDate = String(body.unlockDate || '');
-  if (!text || text.length > 500) return json(request, env, {error:'惊喜信需要 1 到 500 个字符。'}, 400);
+  const body = await writtenTextJSON(request), text = typeof body.body === 'string' ? body.body.trim() : '', gift = typeof body.gift === 'string' ? body.gift.trim() : '💜', unlockDate = String(body.unlockDate || '');
+  if (!text) return json(request, env, {error:'请填写惊喜信正文。'}, 400);
   if (!gift || [...gift].length > 4) return json(request, env, {error:'请选择一个简短的礼物图标。'}, 400);
   if (!validDay(unlockDate)) return json(request, env, {error:'惊喜信日期无效。'}, 400);
   const createdAt = new Date().toISOString();
@@ -640,6 +674,77 @@ async function removeSurprise(request, env, id) {
   return json(request, env, {ok:true, removed:Number(result.meta?.changes) || 0});
 }
 
+function roomWishInfo(row) {
+  return {id:Number(row.id), body:row.body, status:row.status, cost:row.cost, createdAt:row.created_at, decidedAt:row.decided_at};
+}
+
+async function listRoomWishes(env) {
+  const {results} = await env.DB.prepare(`SELECT id, body, status, cost, created_at, decided_at
+    FROM room_wishes ORDER BY (status = 'pending') DESC, id DESC LIMIT 100`).all();
+  return (results || []).map(roomWishInfo);
+}
+
+async function createRoomWish(request, env) {
+  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先输入同步密码。'}, 401);
+  const {body, requestKey} = await bodyJSON(request) || {};
+  const text = typeof body === 'string' ? body.trim() : '';
+  if (!text || text.length > 180 || typeof requestKey !== 'string' || !/^[a-f\d-]{36}$/i.test(requestKey)) {
+    return json(request, env, {error:'请写下 1 到 180 字的家具愿望。'}, 400);
+  }
+  // A retry after a dropped response returns the same wish.
+  await env.DB.prepare(`INSERT INTO room_wishes (request_key, body, created_at)
+    VALUES (?, ?, ?) ON CONFLICT(request_key) DO NOTHING`).bind(requestKey,text,new Date().toISOString()).run();
+  const row = await env.DB.prepare('SELECT * FROM room_wishes WHERE request_key = ?').bind(requestKey).first();
+  if (row.body !== text) return json(request, env, {error:'内容已修改，请重新提交。'}, 409);
+  return json(request, env, {wish:roomWishInfo(row)},201);
+}
+
+async function roomStarCredit(env) {
+  const row = await env.DB.prepare('SELECT revision, encoding, payload FROM sync_state WHERE id = 1').first();
+  if (!row) return {earned:0, revision:0};
+  const state = await stateFromPayload(row.payload,row.encoding);
+  const {seen, remembered, studyDays} = overviewFromState(state,row.revision,'').totals;
+  return {earned:seen + 2 * remembered + 5 * studyDays, revision:Number(row.revision)};
+}
+
+async function careRoomWishes(request, env) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error:'请重新验证进入密码。'}, 401);
+  const [wishes, credit, row] = await Promise.all([
+    listRoomWishes(env), roomStarCredit(env),
+    env.DB.prepare("SELECT COALESCE(SUM(cost),0) AS spent FROM room_wishes WHERE status = 'approved'").first()
+  ]);
+  const spent = Number(row.spent);
+  return json(request, env, {wishes, earned:credit.earned, spent, available:Math.max(0,credit.earned-spent)});
+}
+
+async function decideRoomWish(request, env, id) {
+  if (!await careAuthorized(request, env)) return json(request, env, {error:'请重新验证进入密码。'}, 401);
+  const {status, cost} = await bodyJSON(request) || {};
+  const approved = status === 'approved';
+  if (!Number.isSafeInteger(id) || id < 1 || (approved ? !Number.isSafeInteger(cost) || cost < 0 : status !== 'declined')) {
+    return json(request, env, {error:'请填写有效的星光数。'}, 400);
+  }
+  const at = new Date().toISOString();
+  let row;
+  if (approved) {
+    const credit = await roomStarCredit(env);
+    // Check the progress revision, balance and pending wish in the same write.
+    row = await env.DB.prepare(`UPDATE room_wishes SET status = 'approved', cost = ?, decided_at = ?
+      WHERE id = ? AND status = 'pending'
+      AND COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) = ?
+      AND (? = 0 OR (SELECT COALESCE(SUM(cost),0) FROM room_wishes WHERE status = 'approved') + ? <= ?)
+      RETURNING *`).bind(cost,at,id,credit.revision,cost,cost,credit.earned).first();
+  } else {
+    row = await env.DB.prepare(`UPDATE room_wishes SET status = 'declined', decided_at = ?
+      WHERE id = ? AND status = 'pending' RETURNING *`).bind(at,id).first();
+  }
+  if (row) return json(request, env, {wish:roomWishInfo(row)});
+  const current = await env.DB.prepare('SELECT * FROM room_wishes WHERE id = ?').bind(id).first();
+  if (!current) return json(request, env, {error:'这条愿望不存在。'},404);
+  if (current.status === status && (!approved || current.cost === cost)) return json(request,env,{wish:roomWishInfo(current)});
+  return json(request, env, {error:current.status === 'pending' ? '星光不足或进度刚刚更新，请刷新后再试。' : '这条愿望已经处理过了。'},409);
+}
+
 async function companionHome(request, env) {
   if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
   await deliverScheduledMessages(env);
@@ -648,25 +753,26 @@ async function companionHome(request, env) {
     try { await syncMilestones(env, await stateFromPayload(stateRow.payload, stateRow.encoding)); }
     catch (error) { console.error(JSON.stringify({event:'milestone_sync_failed', message:error?.message || String(error)})); }
   }
-  const [companion, milestones, surprises, photos] = await Promise.all([
+  const [companion, milestones, surprises, photos, wishes] = await Promise.all([
     env.DB.prepare('SELECT active_until, updated_at FROM companionship WHERE id = 1').first(),
     env.DB.prepare('SELECT code, title, detail, achieved_at FROM milestones ORDER BY achieved_at DESC LIMIT 30').all(),
     env.DB.prepare('SELECT id, body, gift, unlock_date, created_at, opened_at FROM surprise_letters WHERE opened_at IS NULL ORDER BY unlock_date, id LIMIT 10').all(),
-    env.DB.prepare('SELECT id, caption, content_type, created_at FROM room_photos ORDER BY created_at DESC, id DESC LIMIT 12').all()
+    env.DB.prepare('SELECT id, caption, content_type, created_at, taken_at, wall_slot, frame_style FROM room_photos ORDER BY CASE WHEN wall_slot<0 THEN 12 ELSE wall_slot END, created_at DESC, id DESC LIMIT 24').all(),
+    listRoomWishes(env)
   ]);
   return json(request, env, {
     companion:companionFromRow(companion),
+    wishes,
     milestones:(milestones.results || []).map(row => ({code:row.code, title:row.title, detail:row.detail, achievedAt:row.achieved_at})),
     surprises:(surprises.results || []).map(row => ({id:Number(row.id), body:row.body, gift:row.gift, unlockDate:row.unlock_date, createdAt:row.created_at, openedAt:row.opened_at || ''})),
-    photos:(photos.results || []).map(row => ({id:Number(row.id), caption:row.caption, contentType:row.content_type, createdAt:row.created_at}))
+    photos:(photos.results || []).map(row => ({id:Number(row.id), caption:row.caption, contentType:row.content_type, createdAt:row.created_at, takenAt:row.taken_at || null, wallSlot:Number(row.wall_slot), frameStyle:ROOM_FRAME_STYLES.has(row.frame_style) ? row.frame_style : 'walnut'}))
   });
 }
 
 async function recordMood(request, env) {
   if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
-  const body = await bodyJSON(request), level = String(body.level || ''), note = typeof body.note === 'string' ? body.note.trim() : '', moodDate = String(body.date || '');
+  const body = await writtenTextJSON(request), level = String(body.level || ''), note = typeof body.note === 'string' ? body.note.trim() : '', moodDate = String(body.date || '');
   if (!['tired', 'okay', 'good'].includes(level) || !validDay(moodDate)) return json(request, env, {error:'今天的心情格式不正确。'}, 400);
-  if (note.length > 200) return json(request, env, {error:'心情文字最多 200 个字符。'}, 400);
   const createdAt = new Date().toISOString();
   await env.DB.prepare('INSERT INTO moods (mood_date, level, note, created_at) VALUES (?, ?, ?, ?)').bind(moodDate, level, note, createdAt).run();
   await env.DB.prepare('DELETE FROM moods WHERE id NOT IN (SELECT id FROM moods ORDER BY id DESC LIMIT 400)').run();
@@ -682,10 +788,17 @@ async function openSurprise(request, env, id) {
   return json(request, env, {ok:true, letter:{id:Number(letter.id), body:letter.body, gift:letter.gift, unlockDate:letter.unlock_date, createdAt:letter.created_at, openedAt:letter.opened_at}});
 }
 
+function validRoomPhotoDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2})?$/.test(value)) return false;
+  const time = value.length === 10 ? value + 'T00:00:00' : value;
+  const parsed = new Date(time + 'Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0,19) === time;
+}
+
 async function uploadRoomPhoto(request, env) {
   if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
   const photoCount = await env.DB.prepare('SELECT COUNT(*) AS count FROM room_photos').first();
-  if (Number(photoCount?.count) >= 12) return json(request, env, {error:'照片墙最多放 12 张，先移除一张再添加吧。'}, 409);
+  if (Number(photoCount?.count) >= 24) return json(request, env, {error:'相册最多保存 24 张，删除不再需要的照片之后再上传。'}, 409);
   const contentType = (request.headers.get('Content-Type') || '').split(';')[0].toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) return json(request, env, {error:'请选择 JPG、PNG 或 WebP 图片。'}, 415);
   const declared = Number(request.headers.get('Content-Length') || 0);
@@ -695,10 +808,37 @@ async function uploadRoomPhoto(request, env) {
   let caption = '';
   try { caption = decodeURIComponent(request.headers.get('X-Photo-Caption') || '').trim().slice(0, 120); }
   catch (_) { return json(request, env, {error:'照片说明格式不正确。'}, 400); }
+  const takenAt = request.headers.get('X-Photo-Taken-At') || null;
+  if (takenAt !== null && !validRoomPhotoDate(takenAt)) return json(request, env, {error:'拍摄日期格式不正确。'}, 400);
+  const occupied = await env.DB.prepare('SELECT wall_slot FROM room_photos WHERE wall_slot BETWEEN 0 AND 11').all();
+  const usedSlots = new Set((occupied.results || []).map(row => Number(row.wall_slot)));
+  const wallSlot = Array.from({length:12}, (_, index) => index).find(index => !usedSlots.has(index)) ?? -1;
   const key = `d1:${crypto.randomUUID()}`;
   const createdAt = new Date().toISOString();
-  const result = await env.DB.prepare('INSERT INTO room_photos (object_key, content_type, caption, created_at, blob_data) VALUES (?, ?, ?, ?, ?)').bind(key, contentType, caption, createdAt, bytes).run();
-  return json(request, env, {ok:true, photo:{id:Number(result.meta?.last_row_id) || 0, caption, contentType, createdAt}}, 201);
+  const frameStyle = 'walnut';
+  const result = await env.DB.prepare('INSERT INTO room_photos (object_key, content_type, caption, created_at, blob_data, wall_slot, frame_style, taken_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(key, contentType, caption, createdAt, bytes, wallSlot, frameStyle, takenAt).run();
+  return json(request, env, {ok:true, photo:{id:Number(result.meta?.last_row_id) || 0, caption, contentType, createdAt, takenAt, wallSlot, frameStyle}}, 201);
+}
+
+async function updateRoomPhotoLayout(request, env, id) {
+  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
+  if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error:'照片编号无效。'}, 400);
+  const body = await bodyJSON(request);
+  if (Object.hasOwn(body,'takenAt')) {
+    const {takenAt} = body;
+    if (takenAt !== null && !validRoomPhotoDate(takenAt)) return json(request, env, {error:'拍摄日期格式不正确。'}, 400);
+    const changed = await env.DB.prepare('UPDATE room_photos SET taken_at = ? WHERE id = ?').bind(takenAt,id).run();
+    if (!Number(changed.meta?.changes)) return json(request, env, {error:'照片不存在。'}, 404);
+    return json(request, env, {ok:true, photo:{id, takenAt}});
+  }
+  const wallSlot = body.wallSlot, frameStyle = String(body.frameStyle || '');
+  if (!Number.isInteger(wallSlot) || wallSlot < -1 || wallSlot > 11) return json(request, env, {error:'请选择有效的照片位置。'}, 400);
+  if (!ROOM_FRAME_STYLES.has(frameStyle)) return json(request, env, {error:'请选择有效的画框样式。'}, 400);
+  const occupied = wallSlot>=0 && await env.DB.prepare('SELECT id FROM room_photos WHERE wall_slot = ? AND id <> ?').bind(wallSlot, id).first();
+  if (occupied) return json(request, env, {error:'这个画框已经放了照片，请选择空位置。'}, 409);
+  const result = await env.DB.prepare('UPDATE room_photos SET wall_slot = ?, frame_style = ? WHERE id = ?').bind(wallSlot, frameStyle, id).run();
+  if (!Number(result.meta?.changes)) return json(request, env, {error:'照片不存在。'}, 404);
+  return json(request, env, {ok:true, photo:{id, wallSlot, frameStyle}});
 }
 
 async function roomPhoto(request, env, id) {
@@ -709,6 +849,42 @@ async function roomPhoto(request, env, id) {
   const bytes = blobValue(row.blob_data);
   if (!bytes.byteLength || bytes.byteLength > MAX_ROOM_PHOTO) return json(request, env, {error:'云端图片数据已损坏，请重新上传。'}, 422);
   return new Response(bytes, {headers:headers(request, env, {'Content-Type':row.content_type, 'Content-Length':String(bytes.byteLength), 'Cache-Control':'private, max-age=300'})});
+}
+
+async function listRoomPhotos(request, env) {
+  if (!await userAuthorized(request,env) && !await careAuthorized(request,env)) {
+    return json(request,env,{error:'请登录后查看照片。'},401);
+  }
+  const rows=await env.DB.prepare('SELECT id,caption,created_at,taken_at,wall_slot,frame_style FROM room_photos ORDER BY CASE WHEN wall_slot<0 THEN 12 ELSE wall_slot END,id DESC LIMIT 24').all();
+  return json(request,env,{photos:rows.results.map(row=>({
+    id:row.id,caption:row.caption,createdAt:row.created_at,takenAt:row.taken_at,wallSlot:row.wall_slot,frameStyle:row.frame_style
+  }))});
+}
+
+async function roomPhotoNotes(request,env,id,url) {
+  const author=await userAuthorized(request,env) ? 'lynn' : await careAuthorized(request,env) ? 'david' : null;
+  if (!author) return json(request,env,{error:'请登录后查看照片留言。'},401);
+  const photo=await env.DB.prepare('SELECT id FROM room_photos WHERE id=?').bind(id).first();
+  if (!photo) return json(request,env,{error:'这张照片已移除。'},404);
+  if (request.method==='POST') {
+    const data=await writtenTextJSON(request);
+    const body=typeof data?.body==='string' ? data.body.trim() : '';
+    if (!body || !/^[a-zA-Z0-9-]{12,72}$/.test(data.clientId || '')) {
+      return json(request,env,{error:body ? '留言编号无效，请重试。' : '请填写留言。'},400);
+    }
+    await env.DB.prepare(`INSERT INTO room_photo_notes(photo_id,author,client_id,body,created_at)
+      SELECT id,?,?,?,? FROM room_photos WHERE id=?
+      ON CONFLICT(photo_id,author,client_id) DO NOTHING`)
+      .bind(author,data.clientId,body,new Date().toISOString(),id).run();
+    const note=await env.DB.prepare('SELECT id,author,body,created_at AS createdAt FROM room_photo_notes WHERE photo_id=? AND author=? AND client_id=?')
+      .bind(id,author,data.clientId).first();
+    return note ? json(request,env,{note}) : json(request,env,{error:'这张照片已移除。'},404);
+  }
+  const before=Number(url.searchParams.get('before') || Number.MAX_SAFE_INTEGER);
+  if (!Number.isSafeInteger(before) || before<1) return json(request,env,{error:'留言页码无效。'},400);
+  const rows=await env.DB.prepare('SELECT id,author,body,created_at AS createdAt FROM room_photo_notes WHERE photo_id=? AND id<? ORDER BY id DESC LIMIT 31')
+    .bind(id,before).all();
+  return json(request,env,{notes:rows.results.slice(0,30).reverse(),more:rows.results.length>30});
 }
 
 async function removeRoomPhoto(request, env, id) {
@@ -931,11 +1107,140 @@ async function writeState(request, env) {
   return json(request, env, {revision: nextRevision, updatedAt, deviceId});
 }
 
+async function roomLive(request, env, role) {
+  const allowed = role==='david' ? await careAuthorized(request,env) : await userAuthorized(request,env);
+  if (!allowed) return json(request,env,{error:'请登录后再进入双人房间。'},401);
+  let body;
+  try { body=await bodyJSON(request); } catch (_) { return json(request,env,{error:'房间数据无效。'},400); }
+  const {visit,sequence,pose,door,seat,gesture,glassSince,mark,ink,boardSince,boardWrite,cornerRead,cornerWrite,cues}=body || {};
+  if (typeof visit!=='string' || !/^[A-Za-z0-9-]{12,72}$/.test(visit)) {
+    return json(request,env,{error:'无效的房间会话。'},400);
+  }
+  if (request.method==='DELETE') {
+    await env.DB.prepare('DELETE FROM room_live_players WHERE role=? AND visit=?').bind(role,visit).run();
+    return json(request,env,{ok:true});
+  }
+  const limits=[[-24.1,6.5],[.9,1.9],[-4.15,7.05],[-7,7],[0,7],[0,1],[0,1],[0,1]];
+  const validId=id=>typeof id==='string' && /^[a-zA-Z0-9-]{12,72}$/.test(id);
+  const validMark=m=>['lynn','david'].includes(m?.room) && validId(m.id) && Array.isArray(m.points) &&
+    m.points.length<=256 && m.points.length%2===0 && m.points.every(n=>Number.isInteger(n)&&n>=0&&n<=1023);
+  const data=boardWrite?.data;
+  const boardKind=boardWrite?.kind;
+  const validBoard=boardWrite && validId(boardWrite.id) && (
+    (boardKind==='note' && typeof data==='string' && data.trim().length>0 && data.length<=480) ||
+    (boardKind==='stroke' && Number.isInteger(data?.color) && data.color>=0 && data.color<4 &&
+       validMark({id:boardWrite.id,room:'lynn',points:data.points}) && data.points.length>0) ||
+    (boardKind==='erase' && validId(data) && data!==boardWrite.id));
+  const validCue=cue=>cue==null||(validId(cue.id) && Number.isSafeInteger(cue.start) && Math.abs(Date.now()-cue.start)<=600000 &&
+    ['lynn','david'].includes(cue.room));
+  const validCorner=cornerWrite==null||(cornerWrite.kind==='note' && typeof cornerWrite.text==='string' && cornerWrite.text.length<=2400)||
+    (cornerWrite.kind==='exhibit' && (cornerWrite.photo===null || Number.isSafeInteger(cornerWrite.photo)&&cornerWrite.photo>0) &&
+      typeof cornerWrite.text==='string' && cornerWrite.text.length<=200);
+  if (!Number.isSafeInteger(sequence) || sequence<1 || !Array.isArray(pose) || ![7,8].includes(pose.length) ||
+      !pose.every((value,i)=>Number.isFinite(value) && value>=limits[i][0] && value<=limits[i][1]) ||
+      (glassSince!=null && (!Number.isSafeInteger(glassSince) || glassSince<0)) ||
+      (mark!=null && (glassSince==null || !validMark(mark))) ||
+      (ink!=null && (!validMark(ink) || ink.points.length===0)) ||
+      (cornerRead!=null && typeof cornerRead!=='boolean') || !validCorner ||
+      (cues!=null && !validCue(cues.dusk)) ||
+      (boardSince!=null && (!Number.isSafeInteger(boardSince) || boardSince<0)) ||
+      (boardWrite!=null && (boardSince==null || !validBoard)) ||
+      (door!=null && (!['lynn','david','entry-lynn','entry-david'].includes(door.room) || typeof door.open!=='boolean')) ||
+      (seat!=null && !/^(lynn|david)-(terrace-)?(left|right)$/.test(seat)) ||
+      (gesture!=null && (!/^[a-zA-Z0-9-]{12,72}$/.test(gesture.id || '') ||
+        !['wave','point','bell-lynn','bell-david','knock-lynn','knock-david'].includes(gesture.kind) ||
+        (gesture.kind.startsWith('knock-') && !validId(gesture.replyTo)) || (gesture.kind==='point' &&
+          (!Array.isArray(gesture.target) || gesture.target.length!==3 ||
+            !gesture.target.every(value=>Number.isFinite(value) && Math.abs(value)<=350)))))) {
+    return json(request,env,{error:'房间位置或门状态无效。'},400);
+  }
+  const now=Date.now();
+  const statements=[env.DB.prepare(`
+    INSERT INTO room_live_players (role,visit,sequence,pose,updated_at,seat,gesture)
+    VALUES (?,?,?,?,?,CASE WHEN NOT EXISTS (
+      SELECT 1 FROM room_live_players WHERE role<>? AND seat=? AND updated_at>?
+    ) THEN ? END,?)
+    ON CONFLICT(role) DO UPDATE SET visit=excluded.visit,sequence=excluded.sequence,
+      pose=excluded.pose,updated_at=excluded.updated_at,seat=excluded.seat,gesture=excluded.gesture
+    WHERE room_live_players.visit<>excluded.visit OR room_live_players.sequence<excluded.sequence
+  `).bind(role,visit,sequence,JSON.stringify(pose),now,role,seat ?? null,now-8500,seat ?? null,
+    gesture || ink || cues ? JSON.stringify({
+      id:gesture?.id,kind:gesture?.kind,target:gesture?.kind==='point' ? gesture.target : undefined,
+      replyTo:gesture?.kind?.startsWith('knock-') ? gesture.replyTo : undefined,
+      cues:cues?.dusk ? {dusk:{id:cues.dusk.id,start:cues.dusk.start,room:cues.dusk.room}} : undefined,
+      ink:ink ? {room:ink.room,id:ink.id,points:ink.points} : undefined
+    }) : null)];
+  if (door) {
+    // Apply a door action only if its matching movement packet is current.
+    statements.push(env.DB.prepare(`
+      INSERT INTO ${door.room.startsWith('entry-') ? 'room_entry_states' : 'room_live_doors'} (room,opened)
+      SELECT ?,? WHERE EXISTS (SELECT 1 FROM room_live_players WHERE role=? AND visit=? AND sequence=?)
+      ON CONFLICT(room) DO UPDATE SET opened=excluded.opened
+    `).bind(door.room,Number(door.open),role,visit,sequence));
+  }
+  if (mark) {
+    statements.push(env.DB.prepare('INSERT OR IGNORE INTO room_glass_marks(room,mark,points) VALUES(?,?,?)').bind(mark.room,mark.id,JSON.stringify(mark.points)));
+    statements.push(env.DB.prepare('DELETE FROM room_glass_marks WHERE room=? AND seq < (SELECT seq FROM room_glass_marks WHERE room=? ORDER BY seq DESC LIMIT 1 OFFSET 47)').bind(mark.room,mark.room));
+  }
+  if(boardWrite){
+    const stored=JSON.stringify(boardKind==='note'?data.trim():boardKind==='stroke'?{color:data.color,points:data.points}:data);
+    if(boardKind==='erase')statements.push(env.DB.prepare(`INSERT OR IGNORE INTO room_hall_board(client_id,author,kind,data)
+      SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM room_hall_board WHERE client_id=? AND author=? AND kind IN ('stroke','note'))`)
+      .bind(boardWrite.id,role,boardKind,stored,data,role));
+    else statements.push(env.DB.prepare('INSERT OR IGNORE INTO room_hall_board(client_id,author,kind,data) VALUES(?,?,?,?)')
+      .bind(boardWrite.id,role,boardKind,stored));
+    // Keep only the most recent board events. A removed event is always newer than its target.
+    statements.push(env.DB.prepare('DELETE FROM room_hall_board WHERE seq < (SELECT seq FROM room_hall_board ORDER BY seq DESC LIMIT 1 OFFSET 179)'));
+  }
+  if(cornerWrite?.kind==='note')statements.push(env.DB.prepare(`INSERT INTO room_corners(author,private_note) VALUES(?,?)
+    ON CONFLICT(author) DO UPDATE SET private_note=excluded.private_note`).bind(role,cornerWrite.text));
+  if(cornerWrite?.kind==='exhibit')statements.push(env.DB.prepare(`INSERT INTO room_corners(author,photo_id,exhibit_note)
+    SELECT ?,?,? WHERE ? IS NULL OR EXISTS (SELECT 1 FROM room_photos WHERE id=?)
+    ON CONFLICT(author) DO UPDATE SET photo_id=excluded.photo_id,exhibit_note=excluded.exhibit_note`)
+    .bind(role,cornerWrite.photo,cornerWrite.text,cornerWrite.photo,cornerWrite.photo));
+  const cornerIndex=statements.length;
+  if(cornerRead||cornerWrite)statements.push(env.DB.prepare(`SELECT author,photo_id,exhibit_note,
+    CASE WHEN author=? THEN private_note END AS private_note FROM room_corners WHERE author=? OR photo_id IS NOT NULL`).bind(role,role));
+  const boardIndex=statements.length;
+  if(boardSince!=null)statements.push(env.DB.prepare('SELECT seq,client_id,author,kind,data FROM room_hall_board WHERE seq>? ORDER BY seq').bind(boardSince));
+  const deltaIndex=statements.length;
+  if (glassSince!=null) {
+    statements.push(env.DB.prepare('SELECT seq,room,mark,points FROM room_glass_marks WHERE seq>? ORDER BY seq').bind(glassSince));
+    statements.push(env.DB.prepare('SELECT room,opened FROM room_entry_states'));
+  }
+  statements.push(env.DB.prepare('SELECT role,visit,pose,seat,gesture FROM room_live_players WHERE updated_at>?').bind(now-8500));
+  statements.push(env.DB.prepare('SELECT room,opened FROM room_live_doors'));
+  const results=await env.DB.batch(statements);
+  const players=results.at(-2).results || [];
+  const peer=players.find(player=>player.role!==role);
+  const own=players.find(player=>player.role===role && player.visit===visit);
+  const doors=Object.fromEntries((results.at(-1).results || []).map(row=>[row.room,!!row.opened]));
+  const marks=glassSince==null ? undefined : results[deltaIndex].results.map(r=>({seq:r.seq,room:r.room,id:r.mark,points:JSON.parse(r.points)}));
+  if (marks) for(const row of results[deltaIndex+1].results) doors[row.room]=!!row.opened;
+  const interaction=peer?.gesture ? JSON.parse(peer.gesture) : {};
+  const {ink:peerInk,cues:peerCues,...peerGesture}=interaction;
+  let corner;
+  if(cornerRead||cornerWrite){
+    const rows=results[cornerIndex].results||[];
+    corner={note:rows.find(r=>r.author===role)?.private_note||'',exhibits:rows.filter(r=>r.photo_id!==null)
+      .map(r=>({author:r.author,photo:r.photo_id,text:r.exhibit_note}))};
+  }
+  const board=boardSince==null ? undefined : results[boardIndex].results.map(
+    r=>({seq:r.seq,id:r.client_id,author:r.author,kind:r.kind,data:JSON.parse(r.data)}));
+  return json(request,env,{marks,board,corner,peer:peer ? {
+    role:peer.role,pose:JSON.parse(peer.pose),...(peer.seat ? {seat:peer.seat} : {}),
+    ...(peerGesture.kind ? {gesture:peerGesture} : {}),...(peerInk ? {ink:peerInk} : {}),...(peerCues?.dusk ? {cues:{dusk:peerCues.dusk}} : {})
+  } : null,doors,seat:own?.seat || null});
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: headers(request, env)});
     const url = new URL(request.url);
     try {
+      if (url.pathname === '/release/opening' && request.method === 'GET') {
+        return json(request,env,{now:Date.now(),opensAt:Date.parse('2026-11-25T00:00:00+08:00')});
+      }
       if (url.pathname === '/health' && request.method === 'GET') return json(request, env, {ok: true, service: 'lynn-words-sync'});
       if (url.pathname === '/admin/session' && request.method === 'POST') return await adminSession(request, env);
       if (url.pathname === '/care/session' && request.method === 'POST') return await careSession(request, env);
@@ -945,6 +1250,9 @@ export default {
       if (url.pathname === '/care/sites/status' && request.method === 'GET') return await careSiteStatus(request, env);
       if (url.pathname === '/care/messages' && request.method === 'GET') return await messageThread(request, env, 'owner');
       if (url.pathname === '/care/messages' && request.method === 'POST') return await sendMessage(request, env, 'owner');
+      if (url.pathname === '/care/room/wishes' && request.method === 'GET') return await careRoomWishes(request,env);
+      const wishDecision = url.pathname.match(/^\/care\/room\/wishes\/(\d+)$/);
+      if (wishDecision && request.method === 'POST') return await decideRoomWish(request,env,Number(wishDecision[1]));
       if (url.pathname === '/care/companion' && ['GET', 'POST'].includes(request.method)) return await careCompanion(request, env);
       if (url.pathname === '/care/scheduled' && ['GET', 'POST'].includes(request.method)) return await careScheduledMessages(request, env);
       if (url.pathname === '/care/surprises' && ['GET', 'POST'].includes(request.method)) return await careSurprises(request, env);
@@ -968,16 +1276,25 @@ export default {
       if (url.pathname === '/messages' && request.method === 'POST') return await sendMessage(request, env, 'lynn');
       if (url.pathname === '/companion' && request.method === 'GET') return await companionHome(request, env);
       if (url.pathname === '/mood' && request.method === 'POST') return await recordMood(request, env);
+      if (['/room/live','/care/room/live'].includes(url.pathname) && ['POST','DELETE'].includes(request.method)) {
+        return await roomLive(request,env,url.pathname.startsWith('/care/') ? 'david' : 'lynn');
+      }
+      if (url.pathname === '/room/wishes' && request.method === 'POST') return await createRoomWish(request,env);
       if (url.pathname === '/room/photos' && request.method === 'POST') return await uploadRoomPhoto(request, env);
+      if (url.pathname === '/room/photos' && request.method === 'GET') return await listRoomPhotos(request,env);
+      const photoNotesRoute=url.pathname.match(/^\/room\/photos\/(\d+)\/notes$/);
+      if (photoNotesRoute && ['GET','POST'].includes(request.method)) return await roomPhotoNotes(request,env,Number(photoNotesRoute[1]),url);
       const surpriseOpen = url.pathname.match(/^\/surprises\/(\d+)\/open$/);
       if (surpriseOpen && request.method === 'POST') return await openSurprise(request, env, Number(surpriseOpen[1]));
       const roomPhotoRoute = url.pathname.match(/^\/room\/photos\/(\d+)$/);
       if (roomPhotoRoute && request.method === 'GET') return await roomPhoto(request, env, Number(roomPhotoRoute[1]));
+      if (roomPhotoRoute && request.method === 'PATCH') return await updateRoomPhotoLayout(request, env, Number(roomPhotoRoute[1]));
       if (roomPhotoRoute && request.method === 'DELETE') return await removeRoomPhoto(request, env, Number(roomPhotoRoute[1]));
       if (url.pathname === '/state' && request.method === 'GET') return await readState(request, env);
       if (url.pathname === '/state' && request.method === 'PUT') return await writeState(request, env);
       return json(request, env, {error: '接口不存在。'}, 404);
     } catch (error) {
+      if (error instanceof TextRequestError) return json(request,env,{error:error.message},error.status);
       console.error(JSON.stringify({event: 'worker_error', path: new URL(request.url).pathname, message: error?.message || String(error)}));
       return json(request, env, {error: '同步服务暂时出了点问题，请稍后再试。'}, 500);
     }
