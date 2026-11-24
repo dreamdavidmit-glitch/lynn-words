@@ -15725,11 +15725,7 @@ var LynnRoom3D = (() => {
       return t;
     };
     const previewSize = quality.uhd ? "overview" : "preview";
-    const preview = tune(loader.load(asset(first, previewSize), () => {
-      if (dead) return;
-      overviewReady = true;
-      overviewDone.value = 1;
-    }));
+    const preview = tune(new Texture());
     const uniforms = {
       valleyPreview: { value: preview },
       valleyAfter: { value: preview },
@@ -15743,6 +15739,78 @@ var LynnRoom3D = (() => {
       uniforms["landscape" + i] = { value: preview };
       uniforms["tilePlacement" + i] = { value: slot.coord };
     });
+    let cancelBase = null, loadingBase = false;
+    function loadBase(size) {
+      loadingBase = true;
+      const report = (state, fraction = null) => quality.onBackdrop?.({ state, fraction });
+      const url = new URL(loader.manager.resolveURL(asset(first, size)), document.baseURI);
+      let transfer = null, temporaryURL = null, timer, settled = false;
+      const release = () => {
+        clearTimeout(timer);
+        if (temporaryURL) URL.revokeObjectURL(temporaryURL);
+      };
+      const done = (image) => {
+        if (settled || dead) return;
+        settled = true;
+        release();
+        cancelBase = null;
+        loadingBase = false;
+        if (image) {
+          preview.image = image;
+          preview.needsUpdate = true;
+          overviewReady = true;
+          overviewDone.value = 1;
+          report("ready", 1);
+        } else if (size === "overview") loadBase("preview");
+        else report("error");
+      };
+      const decode = (src) => {
+        const image = new Image();
+        timer = setTimeout(() => done(null), 2e4);
+        image.onload = () => done(image.naturalWidth ? image : null);
+        image.onerror = () => done(null);
+        image.src = src;
+      };
+      cancelBase = () => {
+        settled = true;
+        transfer?.abort();
+        release();
+      };
+      report("loading");
+      if (!["http:", "https:"].includes(url.protocol) || typeof XMLHttpRequest === "undefined") {
+        decode(url.href);
+        return;
+      }
+      transfer = new XMLHttpRequest();
+      transfer.open("GET", url.href);
+      transfer.responseType = "blob";
+      transfer.timeout = 6e4;
+      transfer.onprogress = (event) => report("loading", event.lengthComputable && event.total > 0 ? Math.min(0.98, event.loaded / event.total) : null);
+      transfer.onerror = transfer.ontimeout = () => done(null);
+      transfer.onload = () => {
+        if (settled) return;
+        if (transfer.status < 200 || transfer.status >= 300 || !transfer.response?.size) {
+          done(null);
+          return;
+        }
+        try {
+          temporaryURL = URL.createObjectURL(transfer.response);
+          report("decoding", 0.99);
+          decode(temporaryURL);
+        } catch (_) {
+          done(null);
+        }
+      };
+      try {
+        transfer.send();
+      } catch (_) {
+        done(null);
+      }
+    }
+    const retry = () => {
+      if (!dead && !loadingBase && !overviewReady) loadBase(previewSize);
+    };
+    queueMicrotask(retry);
     const forget = (i) => {
       const s = active[i];
       s.tex?.dispose();
@@ -15778,6 +15846,10 @@ var LynnRoom3D = (() => {
     return {
       uniforms,
       enabled: quality.tiles,
+      retry,
+      get ready() {
+        return overviewReady;
+      },
       update(camera, phase, now) {
         if (dead || !overviewReady) return;
         if (after && phase > 0.025 && !afterTexture) {
@@ -15826,6 +15898,7 @@ var LynnRoom3D = (() => {
       },
       dispose() {
         dead = true;
+        cancelBase?.();
         preview.dispose();
         afterTexture?.dispose();
         active.forEach((_, i) => forget(i));
@@ -19778,7 +19851,7 @@ var LynnRoom3D = (() => {
       ctx.fillText(label2, width / 2, height / 2, width - 48);
     });
   }
-  function photoTexture(url) {
+  function photoTexture(photo, loadURL) {
     const texture = canvasTexture(1040, 751, (ctx, width, height) => {
       ctx.fillStyle = "#f6e9df";
       ctx.fillRect(0, 0, width, height);
@@ -19800,7 +19873,26 @@ var LynnRoom3D = (() => {
       ctx.shadowColor = "transparent";
       texture.needsUpdate = true;
     };
-    image.src = url;
+    const fail = () => {
+      const canvas = texture.image, ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#f6e9df";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#9b82a6";
+      ctx.font = "600 28px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("\u7167\u7247\u6682\u65F6\u672A\u8F7D\u5165 \xB7 \u70B9\u6309\u67E5\u770B", canvas.width / 2, canvas.height / 2);
+      texture.needsUpdate = true;
+    };
+    image.onerror = fail;
+    if (photo.url) image.src = photo.url;
+    else if (loadURL) Promise.resolve().then(() => loadURL(photo.id)).then((url) => {
+      if (!url) {
+        fail();
+        return;
+      }
+      image.src = url;
+    }).catch(fail);
+    else fail();
     return texture;
   }
   function frameMoulding(width, height, rail) {
@@ -19820,7 +19912,7 @@ var LynnRoom3D = (() => {
     shape.holes.push(cut);
     return new ExtrudeGeometry(shape, { depth: 0.062, bevelEnabled: true, bevelThickness: 0.014, bevelSize: 0.014, bevelSegments: 3 });
   }
-  function buildGallery(parent, photos, textures, owner = "lynn") {
+  function buildGallery(parent, photos, textures, owner, loadPhotoURL) {
     const targets = [];
     const placements = owner === "david" ? [
       [-4.25, 2.43, -4.31, 0],
@@ -19898,7 +19990,7 @@ var LynnRoom3D = (() => {
       addMesh(group, new PlaneGeometry(1.755, 1.37), matBoard, [0, 0, 0.057]);
       const wash = [matBoard];
       if (item.photo) {
-        const artMat = material(16777215, { map: photoTexture(item.photo.url), roughness: 0.94 });
+        const artMat = material(16777215, { map: photoTexture(item.photo, loadPhotoURL), roughness: 0.94 });
         artMat.lightMap = pool;
         wash.push(artMat);
         const art = addMesh(group, new PlaneGeometry(1.52, 1.098), artMat, [0, 0, 0.061]);
@@ -19988,7 +20080,7 @@ var LynnRoom3D = (() => {
   }
   function mountRoom3D(stage, options = {}) {
     if (!stage) throw new Error("3D room stage is unavailable");
-    const mobile = innerWidth < 760;
+    const mobile = innerWidth < 760 || navigator.maxTouchPoints > 0 && matchMedia("(any-pointer: coarse)").matches;
     const skyLight = exterior[festivalExterior[options.theme]] || exterior.sunset;
     const snowNight = skyLight === exterior.snow;
     const sunset = skyLight === exterior.sunset;
@@ -20028,7 +20120,16 @@ var LynnRoom3D = (() => {
     const sceneTools = document.createElement("div");
     sceneTools.className = "room-scene-tools";
     hud.appendChild(sceneTools);
-    stage.replaceChildren(canvas, hud);
+    const splash = document.createElement("div");
+    splash.className = "room-backdrop-loading";
+    splash.innerHTML = '<section aria-label="\u7A97\u666F\u52A0\u8F7D"><p role="status">\u6B63\u5728\u52A0\u8F7D\u7A97\u5916\u98CE\u666F\u2026</p><progress aria-label="\u7A97\u666F\u52A0\u8F7D\u8FDB\u5EA6" max="100"></progress><button type="button" hidden>\u91CD\u8BD5\u7A97\u666F</button></section>';
+    const backdropBar = splash.querySelector("progress");
+    const backdropMessage = splash.querySelector("p");
+    const backdropRetry = splash.querySelector("button");
+    stage.dataset.roomBackdrop = "loading";
+    stage.setAttribute("aria-busy", "true");
+    canvas.style.visibility = hud.style.visibility = "hidden";
+    stage.replaceChildren(canvas, hud, splash);
     const renderer = new WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: mobile ? "low-power" : "high-performance" });
     renderer.outputColorSpace = SRGBColorSpace;
     renderer.toneMapping = ACESFilmicToneMapping;
@@ -20235,12 +20336,23 @@ var LynnRoom3D = (() => {
     const dataSaving = connection?.saveData || ["slow-2g", "2g"].includes(connection?.effectiveType);
     const textureLimit = renderer.capabilities.maxTextureSize;
     const windowQuality = {
-      uhd: !dataSaving && textureLimit >= 3840,
+      uhd: !dataSaving && !mobile && textureLimit >= 3840,
+      onBackdrop({ state, fraction }) {
+        stage.dataset.roomBackdrop = state === "ready" ? "decoded" : state;
+        backdropRetry.hidden = state !== "error";
+        backdropBar.hidden = state === "error";
+        if (fraction === null) backdropBar.removeAttribute("value");
+        else backdropBar.value = Math.floor(fraction * 100);
+        const title = state === "error" ? "\u7A97\u5916\u98CE\u666F\u6682\u65F6\u6CA1\u52A0\u8F7D\u6210\u529F\u3002" : state === "loading" ? "\u6B63\u5728\u52A0\u8F7D\u7A97\u5916\u98CE\u666F\u2026" : "\u6B63\u5728\u7ED8\u5236\u7A97\u666F\u2026";
+        if (backdropMessage.textContent !== title) backdropMessage.textContent = title;
+        if (state === "ready") start();
+      },
       tiles: !dataSaving && !mobile && textureLimit >= 3840 && location.protocol !== "file:" && (navigator.deviceMemory || 8) >= 4,
       hd: !dataSaving && textureLimit >= 3548,
       anisotropy: MathUtils.clamp(renderer.capabilities.getMaxAnisotropy(), 1, 16)
     };
     const { room, davidRoom, valley, harborFlashes, valleyMask, duskPhase, valleySun, moonMap, windowGlass, balconyDoors } = buildRoom(scene, skyLight, windowQuality, options.theme || "everyday");
+    backdropRetry.onclick = valley.retry;
     const fireworks = harborFlashes ? buildHarborFireworks(room, scene, harborFlashes, mobile) : null;
     let fireworksTime = 0, fireworksPainted = false;
     let steamTime = 0, teaSteam = null;
@@ -20424,8 +20536,8 @@ var LynnRoom3D = (() => {
       renderer.shadowMap.needsUpdate = true;
     });
     const textures = [];
-    const gallery = buildGallery(room, options.photos || [], textures);
-    const davidGallery = buildGallery(davidRoom, options.davidPhotos || [], textures, "david");
+    const gallery = buildGallery(room, options.photos || [], textures, "lynn", options.loadPhotoURL);
+    const davidGallery = buildGallery(davidRoom, options.davidPhotos || [], textures, "david", options.loadPhotoURL);
     const season = options.theme ? buildSeason(room, options.theme, roomTools) : buildReadingCart(room, roomTools);
     const davidSeason = buildSeason(davidRoom, options.theme, roomTools, "david");
     if (davidSeason) davidObstacles.push(davidSeason.obstacle);
@@ -20992,7 +21104,7 @@ var LynnRoom3D = (() => {
       camera.updateProjectionMatrix();
     };
     const draw = (now) => {
-      if (destroyed || !visible || document.hidden || document.body.classList.contains("message-open")) {
+      if (destroyed || !visible || !valley.ready || document.hidden || document.body.classList.contains("message-open")) {
         frame = 0;
         return;
       }
@@ -21165,6 +21277,12 @@ var LynnRoom3D = (() => {
       if (hint.textContent !== prompt) hint.textContent = prompt;
       valley.update(camera, duskPhase.value, now);
       renderer.render(scene, camera);
+      if (splash.isConnected) {
+        stage.dataset.roomBackdrop = "ready";
+        stage.removeAttribute("aria-busy");
+        canvas.style.visibility = hud.style.visibility = "";
+        splash.remove();
+      }
       frame = requestAnimationFrame(draw);
     };
     const start = () => {
@@ -21432,6 +21550,8 @@ var LynnRoom3D = (() => {
         renderer.forceContextLoss?.();
         stage.closest(".monster-room")?.classList.remove("room-3d-ready");
         stage.setAttribute("aria-hidden", "true");
+        stage.removeAttribute("aria-busy");
+        delete stage.dataset.roomBackdrop;
         stage.replaceChildren();
       }
     };

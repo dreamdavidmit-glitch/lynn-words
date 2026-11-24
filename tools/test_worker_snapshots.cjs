@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const {DatabaseSync} = require('node:sqlite');
 
 const base64url = value => Buffer.from(value).toString('base64url');
 function signedToken(secret, role, generation = 1) {
@@ -12,7 +13,26 @@ const bytes = value => value instanceof ArrayBuffer ? Array.from(new Uint8Array(
 const payloadFor = revision => Buffer.from(JSON.stringify({app:'wordsequence-public',version:1,state:{decks:[{id:'deck-1',title:'CET-4',words:[{id:'a'},{id:'b'},{id:'c'}],progress:Object.fromEntries(['a','b','c'].slice(0,Math.min(3,revision)).map((id,index)=>[id,{seen:true,attempts:revision+index,longTermSuccesses:index?0:1,firstSeenDate:`2026-11-0${index+1}`,lastLongTermSuccessDate:index?'':`2026-11-0${index+1}`}]))}],activeDeckId:'deck-1',studyDays:['2026-11-01','2026-11-02','2026-11-03'].slice(0,Math.min(3,revision)),dailyLog:{'2026-11-01':{activeMs:600000,attempts:8,correct:6,wrong:2,rescueDone:[]},'2026-11-02':{activeMs:900000,attempts:12,correct:10,wrong:2,rescueDone:['a']},'2026-11-03':{activeMs:300000,attempts:4,correct:4,wrong:0,rescueDone:[]}},moodLog:revision>=8?{'2026-11-04':{level:'okay',note:'离线写下的心情',createdAt:1793793600000}}:{}}}));
 
 function memoryDB() {
-  const data = {state: null, auth: null, authAttempts: [], claimUses: [], presence: null, careAuth: null, companion: null, sites: [], messages: [], snapshots: [], moods: [], milestones: [], scheduled: [], surprises: [], photos: [], nextId: 1, nextSiteId: 1, nextMessageId: 1, nextMoodId: 1, nextScheduledId: 1, nextSurpriseId: 1, nextPhotoId: 1};
+  // Exercise room SQL against the actual schema instead of imitating its constraints.
+  const rooms = new DatabaseSync(':memory:');
+  const migrationDir = path.join(__dirname, '..', 'cloudflare', 'migrations');
+  for (const file of fs.readdirSync(migrationDir).filter(name=>name.endsWith('.sql')).sort()) {
+    rooms.exec(fs.readFileSync(path.join(migrationDir,file),'utf8'));
+  }
+  const roomStatement = (sql, values=[]) => {
+    const query=rooms.prepare(sql);
+    return {
+      bind: (...args)=>roomStatement(sql,args),
+      first:async()=>{
+        const row=query.get(...values);
+        if (row?.blob_data) row.blob_data={type:'Buffer',data:Array.from(row.blob_data)};
+        return row || null;
+      },
+      all:async()=>({results:query.all(...values)}),
+      run:async()=>({meta:query.run(...values)})
+    };
+  };
+  const data = {state: null, auth: null, authAttempts: [], claimUses: [], presence: null, careAuth: null, companion: null, sites: [], messages: [], snapshots: [], moods: [], milestones: [], scheduled: [], surprises: [], nextId: 1, nextSiteId: 1, nextMessageId: 1, nextMoodId: 1, nextScheduledId: 1, nextSurpriseId: 1};
   const statement = (sql, values = []) => ({
     sql: sql.replace(/\s+/g, ' ').trim(), values,
     bind(...next) { return statement(sql, next); },
@@ -24,7 +44,6 @@ function memoryDB() {
       if (this.sql.includes('FROM claim_uses')) return data.claimUses.includes(this.values[0]) ? {token_hash:this.values[0]} : null;
       if (this.sql.includes('FROM care_auth')) return data.careAuth ? {...data.careAuth} : null;
       if (this.sql.includes('COUNT(*) AS count FROM monitored_sites')) return {count:data.sites.length};
-      if (this.sql.includes('COUNT(*) AS count FROM room_photos')) return {count:data.photos.length};
       if (this.sql.includes('FROM presence')) return data.presence ? {...data.presence} : null;
       if (this.sql.includes('FROM companionship')) return data.companion ? {...data.companion} : null;
       if (this.sql.includes('FROM moods')) return data.moods.length ? {...data.moods.at(-1)} : null;
@@ -35,7 +54,6 @@ function memoryDB() {
       if (this.sql.startsWith('UPDATE surprise_letters SET opened_at')) {
         const row=data.surprises.find(item=>item.id===Number(this.values[1])&&!item.opened_at); if(!row)return null; row.opened_at=this.values[0]; return {...row};
       }
-      if (this.sql.includes('SELECT content_type, blob_data FROM room_photos')) return data.photos.find(item=>item.id===Number(this.values[0]))||null;
       if (this.sql.includes('FROM progress_snapshots WHERE id')) return data.snapshots.find(item => item.id === Number(this.values[0])) || null;
       throw new Error(`Unexpected first: ${this.sql}`);
     },
@@ -48,7 +66,6 @@ function memoryDB() {
       if (this.sql.includes('FROM scheduled_messages')) return {results:[...data.scheduled].sort((a,b)=>b.scheduled_for.localeCompare(a.scheduled_for)).slice(0,50)};
       if (this.sql.includes('FROM surprise_letters WHERE opened_at IS NULL')) return {results:data.surprises.filter(item=>!item.opened_at).sort((a,b)=>a.unlock_date.localeCompare(b.unlock_date)||a.id-b.id).slice(0,10)};
       if (this.sql.includes('FROM surprise_letters')) return {results:[...data.surprises].sort((a,b)=>b.unlock_date.localeCompare(a.unlock_date)||b.id-a.id).slice(0,50)};
-      if (this.sql.includes('FROM room_photos')) return {results:[...data.photos].sort((a,b)=>b.id-a.id).slice(0,12)};
       throw new Error(`Unexpected all: ${this.sql}`);
     },
     async run() { return execute(this); }
@@ -96,12 +113,6 @@ function memoryDB() {
       data.moods.push({id:data.nextMoodId++,mood_date:v[0],level:v[1],note:v[2],created_at:v[3]}); return {meta:{changes:1}};
     }
     if (sql.startsWith('DELETE FROM moods')) { data.moods=data.moods.slice(-400); return {meta:{changes:0}}; }
-    if (sql.startsWith('INSERT INTO room_photos')) {
-      const id=data.nextPhotoId++; data.photos.push({id,object_key:v[0],content_type:v[1],caption:v[2],created_at:v[3],blob_data:bytes(v[4])}); return {meta:{changes:1,last_row_id:id}};
-    }
-    if (sql.startsWith('DELETE FROM room_photos')) {
-      const before=data.photos.length; data.photos=data.photos.filter(item=>item.id!==Number(v[0])); return {meta:{changes:before-data.photos.length}};
-    }
     if (sql.startsWith('INSERT INTO care_auth')) {
       data.careAuth = {salt:v[0], password_hash:v[1], iterations:Number(v[2]), updated_at:v[3]}; return {meta:{changes:1}};
     }
@@ -146,7 +157,7 @@ function memoryDB() {
     if (sql.startsWith('DELETE FROM progress_snapshots')) { data.snapshots.sort((a,b)=>b.id-a.id); data.snapshots = data.snapshots.slice(0,7); return {meta:{changes:1}}; }
     throw new Error(`Unexpected batch statement: ${sql}`);
   }
-  return {data, prepare: statement, async batch(statements) { const copy = structuredClone(data); try { return await Promise.all(statements.map(execute)); } catch (error) { Object.assign(data,copy); throw error; } }};
+  return {data, rooms, prepare:sql=>/\broom_(?:photos|wishes)\b/.test(sql) ? roomStatement(sql) : statement(sql), async batch(statements) { const copy = structuredClone(data); try { return await Promise.all(statements.map(execute)); } catch (error) { Object.assign(data,copy); throw error; } }};
 }
 
 (async () => {
@@ -238,7 +249,7 @@ function memoryDB() {
   const photoUpload = await worker.fetch(new Request('https://sync.test/room/photos', {method:'POST', headers:{Authorization:`Bearer ${user}`,Origin:'https://example.test','Content-Type':'image/webp','X-Photo-Caption':encodeURIComponent('今天的照片')}, body:Buffer.from([82,73,70,70,1,2,3,4])}), env);
   assert.equal(photoUpload.status, 201, await photoUpload.clone().text());
   const photoId = (await photoUpload.json()).photo.id;
-  assert.equal(db.data.photos.length, 1);
+  assert.equal(db.rooms.prepare('SELECT COUNT(*) AS count FROM room_photos').get().count, 1);
   const companionHome = await worker.fetch(new Request('https://sync.test/companion', {headers:{Authorization:`Bearer ${user}`,Origin:'https://example.test'}}), env);
   assert.equal(companionHome.status, 200, await companionHome.clone().text());
   const companionBody = await companionHome.json();
@@ -248,7 +259,6 @@ function memoryDB() {
   assert.ok(companionBody.milestones.some(item=>item.code==='first-study'));
   const privatePhoto = await worker.fetch(new Request(`https://sync.test/room/photos/${photoId}`, {headers:{Origin:'https://example.test'}}), env);
   assert.equal(privatePhoto.status, 401);
-  db.data.photos[0].blob_data = {type:'Buffer', data:[82,73,70,70,1,2,3,4]};
   const ownPhoto = await worker.fetch(new Request(`https://sync.test/room/photos/${photoId}`, {headers:{Authorization:`Bearer ${user}`,Origin:'https://example.test'}}), env);
   assert.equal(ownPhoto.status, 200);
   assert.deepEqual(Array.from(new Uint8Array(await ownPhoto.arrayBuffer())), [82,73,70,70,1,2,3,4]);
@@ -298,7 +308,7 @@ function memoryDB() {
   assert.ok(ownerInboxBody.messages.at(-1).readAt);
   const removePhoto = await worker.fetch(new Request(`https://sync.test/room/photos/${photoId}`, {method:'DELETE',headers:{Authorization:`Bearer ${user}`,Origin:'https://example.test'}}), env);
   assert.equal(removePhoto.status, 200, await removePhoto.clone().text());
-  assert.equal(db.data.photos.length, 0);
+  assert.equal(db.rooms.prepare('SELECT COUNT(*) AS count FROM room_photos').get().count, 0);
   const restore = await worker.fetch(new Request('https://sync.test/admin/snapshots/restore', {method:'POST', headers:{Authorization:`Bearer ${admin}`, Origin:'https://example.test', 'Content-Type':'application/json'}, body:JSON.stringify({id:old.id})}), env);
   assert.equal(restore.status, 200, await restore.text());
   assert.equal(db.data.state.revision, 9);

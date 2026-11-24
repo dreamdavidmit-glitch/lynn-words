@@ -145,7 +145,7 @@
     const oldWish = oldRoom?.querySelector('.room-wish');
     const oldCaption = oldRoom?.querySelector('[data-room-caption]');
     const hero = context?.route === 'home' ? document.querySelector('#app .hero') : null;
-    const photosKey = JSON.stringify(cloud.photos || []);
+    const photosKey = JSON.stringify([cloud.photos||[],cloud.davidPhotos||[]]);
     const keepRoom = !!hero && oldRoom?.querySelector('.monster-room')?.dataset.roomTheme === roomTheme() && roomPhotosKey === photosKey;
     const reopenRoom = !!hero && !!oldRoom?.querySelector('.room-3d-ready, .room-3d-stage.is-loading');
     if (!keepRoom) {
@@ -208,7 +208,7 @@
     }) : Promise.resolve();
     room3DLoader = localAssets.then(() => new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = 'room3d.bundle.js?v=joystick-album-1';
+      script.src = 'room3d.bundle.js?v=david-album-1';
       script.async = true;
       script.dataset.room3dEngine = 'true';
       script.onload = () => root.LynnRoom3D ? resolve(root.LynnRoom3D) : reject(new Error('3D engine did not initialize'));
@@ -232,12 +232,10 @@
       room3DModule ||= await loadRoom3DEngine();
       if (!stage.isConnected) return;
       if (!room3DModule.supportsRoom3D()) throw new Error('当前浏览器无法打开 3D 房间。');
-      const settled = await Promise.allSettled((cloud.photos || []).filter(photo=>Number(photo.wallSlot)!==-1).slice(0,12).map(async photo => ({...photo, url:await ensurePhotoURL(Number(photo.id))})));
-      if (!stage.isConnected) return;
-      const photos = settled.filter(item => item.status === 'fulfilled').map(item => item.value);
+      const photos=cloud.photos || [], davidPhotos=cloud.davidPhotos || [];
       const localPreview=root.location?.pathname?.endsWith('/room-preview.html');
       const exchange=localPreview ? room3DModule.createPreviewRoomExchange('lynn') : (connected() ? root.LynnSync?.roomLive : null);
-      room3D = room3DModule.mountRoom3D(stage, {owned:roomFurniture, photos, photoCatalog:cloud.photos||[], loadPhotoURL:ensurePhotoURL, theme:room.dataset.roomTheme, onPhoto:show3DPhoto, exchange, outboxKey:'lynn:glass-outbox:'+(localPreview?'preview:':'')+'lynn'});
+      room3D = room3DModule.mountRoom3D(stage, {owned:roomFurniture, photos, davidPhotos, photoCatalog:[...photos,...davidPhotos], loadPhotoURL:ensurePhotoURL, theme:room.dataset.roomTheme, onPhoto:show3DPhoto, exchange, outboxKey:'lynn:glass-outbox:'+(localPreview?'preview:':'')+'lynn'});
       stage.classList.remove('is-loading');
     } catch (reason) {
       if (!stage.isConnected) return;
@@ -323,7 +321,7 @@
 
   function show3DPhoto(photo) {
     root.LynnRoomAlbum.open(photo,{
-      photos:cloud.photos || [],loadURL:ensurePhotoURL,isAvailable:connected,
+      photos:(photo.owner==='david' ? cloud.davidPhotos : cloud.photos) || [],loadURL:ensurePhotoURL,isAvailable:connected,
       draftScope:location.pathname.endsWith('/room-preview.html') ? 'preview-lynn' : 'lynn',
       readNotes:root.LynnSync?.roomPhotoNotes,postNote:root.LynnSync?.postRoomPhotoNote,
       retryPhoto(id) {

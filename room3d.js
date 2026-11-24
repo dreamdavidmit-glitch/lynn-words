@@ -970,7 +970,7 @@ function paintingTexture(index) {
   });
 }
 
-function photoTexture(url) {
+function photoTexture(photo, loadURL) {
   const texture = canvasTexture(1040, 751, (ctx, width, height) => {
     ctx.fillStyle = '#f6e9df'; ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#9b82a6'; ctx.font = '600 28px system-ui, sans-serif'; ctx.textAlign = 'center';
@@ -987,7 +987,20 @@ function photoTexture(url) {
     ctx.shadowColor = 'transparent';
     texture.needsUpdate = true;
   };
-  image.src = url;
+  const fail=()=>{
+    const canvas=texture.image, ctx=canvas.getContext('2d');
+    ctx.fillStyle='#f6e9df';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#9b82a6';ctx.font='600 28px system-ui, sans-serif';ctx.textAlign='center';
+    ctx.fillText('照片暂时未载入 · 点按查看',canvas.width/2,canvas.height/2);
+    texture.needsUpdate=true;
+  };
+  image.onerror=fail;
+  if (photo.url) image.src=photo.url;
+  else if (loadURL) Promise.resolve().then(()=>loadURL(photo.id)).then(url=>{
+    if (!url) { fail(); return; }
+    image.src=url;
+  }).catch(fail);
+  else fail();
   return texture;
 }
 
@@ -1001,7 +1014,7 @@ function frameMoulding(width, height, rail) {
   return new THREE.ExtrudeGeometry(shape,{depth:.062,bevelEnabled:true,bevelThickness:.014,bevelSize:.014,bevelSegments:3});
 }
 
-function buildGallery(parent, photos, textures, owner='lynn') {
+function buildGallery(parent, photos, textures, owner, loadPhotoURL) {
   const targets = [];
   const placements = owner==='david' ? [
     [-4.25,2.43,-4.31,0],[-1.43,2.43,-4.31,0],[1.43,2.43,-4.31,0],[4.25,2.43,-4.31,0],
@@ -1054,7 +1067,7 @@ function buildGallery(parent, photos, textures, owner='lynn') {
     addMesh(group,new THREE.PlaneGeometry(1.755,1.37),matBoard,[0,0,.057]);
     const wash=[matBoard];
     if(item.photo) {
-      const artMat=material(0xffffff,{map:photoTexture(item.photo.url),roughness:.94});
+      const artMat=material(0xffffff,{map:photoTexture(item.photo,loadPhotoURL),roughness:.94});
       artMat.lightMap=pool;wash.push(artMat);
       const art=addMesh(group,new THREE.PlaneGeometry(1.52,1.098),artMat,[0,0,.061]);
       art.castShadow=false;art.userData.photo=item.photo;targets.push(art);
@@ -1144,7 +1157,7 @@ function storeRoomPreferences(theme, preferences, field) {
 
 export function mountRoom3D(stage, options = {}) {
   if (!stage) throw new Error('3D room stage is unavailable');
-  const mobile = innerWidth < 760;
+  const mobile = innerWidth < 760 || (navigator.maxTouchPoints>0 && matchMedia('(any-pointer: coarse)').matches);
   const skyLight=exterior[festivalExterior[options.theme]] || exterior.sunset;
   const snowNight=skyLight===exterior.snow;
   const sunset=skyLight===exterior.sunset;
@@ -1185,7 +1198,16 @@ export function mountRoom3D(stage, options = {}) {
   const sceneTools = document.createElement('div');
   sceneTools.className = 'room-scene-tools';
   hud.appendChild(sceneTools);
-  stage.replaceChildren(canvas, hud);
+  const splash = document.createElement('div');
+  splash.className = 'room-backdrop-loading';
+  splash.innerHTML = '<section aria-label="窗景加载"><p role="status">正在加载窗外风景…</p><progress aria-label="窗景加载进度" max="100"></progress><button type="button" hidden>重试窗景</button></section>';
+  const backdropBar=splash.querySelector('progress');
+  const backdropMessage=splash.querySelector('p');
+  const backdropRetry=splash.querySelector('button');
+  stage.dataset.roomBackdrop='loading';
+  stage.setAttribute('aria-busy','true');
+  canvas.style.visibility=hud.style.visibility='hidden';
+  stage.replaceChildren(canvas, hud, splash);
 
   const renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: false, powerPreference: mobile ? 'low-power' : 'high-performance'});
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1374,13 +1396,25 @@ export function mountRoom3D(stage, options = {}) {
   const dataSaving = connection?.saveData || ['slow-2g','2g'].includes(connection?.effectiveType);
   const textureLimit = renderer.capabilities.maxTextureSize;
   const windowQuality = {
-    uhd:!dataSaving && textureLimit >= 3840,
+    uhd:!dataSaving && !mobile && textureLimit >= 3840,
+    onBackdrop({state,fraction}) {
+      stage.dataset.roomBackdrop=state==='ready' ? 'decoded' : state;
+      backdropRetry.hidden=state!=='error';
+      backdropBar.hidden=state==='error';
+      if (fraction===null) backdropBar.removeAttribute('value');
+      else backdropBar.value=Math.floor(fraction*100);
+      const title=state==='error' ? '窗外风景暂时没加载成功。'
+        : state==='loading' ? '正在加载窗外风景…' : '正在绘制窗景…';
+      if (backdropMessage.textContent!==title) backdropMessage.textContent=title;
+      if (state==='ready') start();
+    },
     tiles:!dataSaving && !mobile && textureLimit >= 3840 && location.protocol!=='file:' && (navigator.deviceMemory || 8) >= 4,
     hd:!dataSaving && textureLimit >= 3548,
     anisotropy:THREE.MathUtils.clamp(renderer.capabilities.getMaxAnisotropy(),1,16)
   };
   const {room,davidRoom,valley,harborFlashes,valleyMask,duskPhase,valleySun,moonMap,windowGlass,balconyDoors} =
     buildRoom(scene,skyLight,windowQuality,options.theme || 'everyday');
+  backdropRetry.onclick=valley.retry;
   const fireworks = harborFlashes ? buildHarborFireworks(room,scene,harborFlashes,mobile) : null;
   let fireworksTime = 0, fireworksPainted = false;
   let steamTime = 0, teaSteam = null;
@@ -1537,8 +1571,8 @@ export function mountRoom3D(stage, options = {}) {
     renderer.shadowMap.needsUpdate=true;
   });
   const textures = [];
-  const gallery=buildGallery(room, options.photos || [], textures);
-  const davidGallery=buildGallery(davidRoom,options.davidPhotos || [],textures,'david');
+  const gallery=buildGallery(room, options.photos || [], textures,'lynn',options.loadPhotoURL);
+  const davidGallery=buildGallery(davidRoom,options.davidPhotos || [],textures,'david',options.loadPhotoURL);
   const season=options.theme ? buildSeason(room,options.theme,roomTools) : buildReadingCart(room,roomTools);
   const davidSeason=buildSeason(davidRoom,options.theme,roomTools,'david');
   if(davidSeason) davidObstacles.push(davidSeason.obstacle);
@@ -2029,7 +2063,7 @@ export function mountRoom3D(stage, options = {}) {
   };
 
   const draw = now => {
-    if (destroyed || !visible || document.hidden || document.body.classList.contains('message-open')) { frame = 0; return; }
+    if (destroyed || !visible || !valley.ready || document.hidden || document.body.classList.contains('message-open')) { frame = 0; return; }
     resize();
     const elapsed = Math.max(0, (now - lastFrame) / 1000);
     const delta = Math.min(.05,elapsed);
@@ -2208,6 +2242,12 @@ export function mountRoom3D(stage, options = {}) {
     if (hint.textContent !== prompt) hint.textContent = prompt;
     valley.update(camera,duskPhase.value,now);
     renderer.render(scene, camera);
+    if (splash.isConnected) {
+      stage.dataset.roomBackdrop='ready';
+      stage.removeAttribute('aria-busy');
+      canvas.style.visibility=hud.style.visibility='';
+      splash.remove();
+    }
     frame = requestAnimationFrame(draw);
   };
 
@@ -2420,6 +2460,8 @@ export function mountRoom3D(stage, options = {}) {
       renderer.forceContextLoss?.();
       stage.closest('.monster-room')?.classList.remove('room-3d-ready');
       stage.setAttribute('aria-hidden', 'true');
+      stage.removeAttribute('aria-busy');
+      delete stage.dataset.roomBackdrop;
       stage.replaceChildren();
     }
   };

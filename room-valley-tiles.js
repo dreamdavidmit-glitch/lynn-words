@@ -70,11 +70,7 @@ export function makeValleyTiles(loader, theme, quality) {
   const sampleRay=new THREE.Vector3();
   const tune = t => { t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=quality.anisotropy; return t; };
   const previewSize = quality.uhd ? 'overview' : 'preview';
-  const preview = tune(loader.load(asset(first,previewSize), () => {
-    if (dead) return;
-    overviewReady=true;
-    overviewDone.value=1;
-  }));
+  const preview = tune(new THREE.Texture());
   const uniforms = {
     valleyPreview:{value:preview}, valleyAfter:{value:preview},
     valleyPreviewReady:overviewDone, valleyAfterReady:afterDone, valleyBounds:{value:valleyBounds},
@@ -84,6 +80,68 @@ export function makeValleyTiles(loader, theme, quality) {
     uniforms['landscape'+i]={value:preview};
     uniforms['tilePlacement'+i]={value:slot.coord};
   });
+  let cancelBase=null, loadingBase=false;
+  function loadBase(size) {
+    loadingBase=true;
+    const report=(state, fraction=null)=>quality.onBackdrop?.({state,fraction});
+    const url = new URL(loader.manager.resolveURL(asset(first,size)), document.baseURI);
+    let transfer=null, temporaryURL=null, timer, settled=false;
+    const release=()=>{
+      clearTimeout(timer);
+      if (temporaryURL) URL.revokeObjectURL(temporaryURL);
+    };
+    const done = image => {
+      if (settled || dead) return;
+      settled=true;
+      release();
+      cancelBase=null;
+      loadingBase=false;
+      if (image) {
+        preview.image=image;
+        preview.needsUpdate=true;
+        overviewReady=true;
+        overviewDone.value=1;
+        report('ready',1);
+      } else if (size==='overview') loadBase('preview');
+      else report('error');
+    };
+    const decode = src => {
+      const image=new Image();
+      timer=setTimeout(()=>done(null),20000);
+      image.onload=()=>done(image.naturalWidth ? image : null);
+      image.onerror=()=>done(null);
+      image.src=src;
+    };
+    cancelBase=()=>{
+      settled=true;
+      transfer?.abort();
+      release();
+    };
+    report('loading');
+    if (!['http:','https:'].includes(url.protocol) || typeof XMLHttpRequest==='undefined') {
+      decode(url.href);
+      return;
+    }
+    transfer=new XMLHttpRequest();
+    transfer.open('GET',url.href);
+    transfer.responseType='blob';
+    transfer.timeout=60000;
+    transfer.onprogress=event=>report('loading',event.lengthComputable && event.total>0
+      ? Math.min(.98,event.loaded/event.total) : null);
+    transfer.onerror=transfer.ontimeout=()=>done(null);
+    transfer.onload=()=>{
+      if (settled) return;
+      if (transfer.status<200 || transfer.status>=300 || !transfer.response?.size) { done(null); return; }
+      try {
+        temporaryURL=URL.createObjectURL(transfer.response);
+        report('decoding',.99);
+        decode(temporaryURL);
+      } catch (_) { done(null); }
+    };
+    try { transfer.send(); } catch (_) { done(null); }
+  }
+  const retry=()=>{ if (!dead && !loadingBase && !overviewReady) loadBase(previewSize); };
+  queueMicrotask(retry);
   const forget = i => {
     const s=active[i];
     s.tex?.dispose();
@@ -106,7 +164,8 @@ export function makeValleyTiles(loader, theme, quality) {
     },undefined,() => { finish(); failed.add(entry.key); }));
   };
   return {
-    uniforms, enabled:quality.tiles,
+    uniforms, enabled:quality.tiles, retry,
+    get ready() { return overviewReady; },
     update(camera, phase, now) {
       if (dead || !overviewReady) return;
       if (after && phase>.025 && !afterTexture) {
@@ -155,6 +214,7 @@ export function makeValleyTiles(loader, theme, quality) {
     },
     dispose() {
       dead=true;
+      cancelBase?.();
       preview.dispose();
       afterTexture?.dispose();
       active.forEach((_,i)=>forget(i));

@@ -362,3 +362,14 @@ footer p, footer small { font-size: 9px; }
 
 .care-mood p,.care-mini-list article strong{white-space:pre-wrap;overflow-wrap:anywhere}
 .care-mini-list article>div{min-width:0}
+
+.care-david-album details>summary{cursor:pointer;color:var(--ink);font-weight:750}
+.care-david-album details p{font-size:13px;color:var(--ink-soft)}
+.care-david-album fieldset{min-width:0;border:0;padding:0;margin:0}
+.care-david-album label{font-size:12px}
+.care-david-album form>button,.care-david-album [data-refresh]{font-size:12px;padding:9px 12px}
+.care-david-album [data-refresh]{margin-top:12px;border-radius:10px;background:#f3e9fa;color:#674480}
+.care-david-album .care-mini-list article{flex-wrap:wrap}
+.care-david-album .care-mini-list strong{flex:1;font-size:12px;min-width:100px}
+.care-david-album .care-mini-list select{width:min(145px,55%);padding:4px 7px;font:inherit}
+.care-david-album .care-mini-list button{font-size:11px}

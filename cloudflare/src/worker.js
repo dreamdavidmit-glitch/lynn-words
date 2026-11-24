@@ -753,11 +753,12 @@ async function companionHome(request, env) {
     try { await syncMilestones(env, await stateFromPayload(stateRow.payload, stateRow.encoding)); }
     catch (error) { console.error(JSON.stringify({event:'milestone_sync_failed', message:error?.message || String(error)})); }
   }
-  const [companion, milestones, surprises, photos, wishes] = await Promise.all([
+  const [companion, milestones, surprises, photos, davidPhotos, wishes] = await Promise.all([
     env.DB.prepare('SELECT active_until, updated_at FROM companionship WHERE id = 1').first(),
     env.DB.prepare('SELECT code, title, detail, achieved_at FROM milestones ORDER BY achieved_at DESC LIMIT 30').all(),
     env.DB.prepare('SELECT id, body, gift, unlock_date, created_at, opened_at FROM surprise_letters WHERE opened_at IS NULL ORDER BY unlock_date, id LIMIT 10').all(),
-    env.DB.prepare('SELECT id, caption, content_type, created_at, taken_at, wall_slot, frame_style FROM room_photos ORDER BY CASE WHEN wall_slot<0 THEN 12 ELSE wall_slot END, created_at DESC, id DESC LIMIT 24').all(),
+    roomPhotoList(env,'lynn'),
+    roomPhotoList(env,'david',true),
     listRoomWishes(env)
   ]);
   return json(request, env, {
@@ -765,7 +766,7 @@ async function companionHome(request, env) {
     wishes,
     milestones:(milestones.results || []).map(row => ({code:row.code, title:row.title, detail:row.detail, achievedAt:row.achieved_at})),
     surprises:(surprises.results || []).map(row => ({id:Number(row.id), body:row.body, gift:row.gift, unlockDate:row.unlock_date, createdAt:row.created_at, openedAt:row.opened_at || ''})),
-    photos:(photos.results || []).map(row => ({id:Number(row.id), caption:row.caption, contentType:row.content_type, createdAt:row.created_at, takenAt:row.taken_at || null, wallSlot:Number(row.wall_slot), frameStyle:ROOM_FRAME_STYLES.has(row.frame_style) ? row.frame_style : 'walnut'}))
+    photos, davidPhotos
   });
 }
 
@@ -795,10 +796,23 @@ function validRoomPhotoDate(value) {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0,19) === time;
 }
 
+async function roomPhotoOwner(request, env) {
+  if (await userAuthorized(request, env)) return 'lynn';
+  if (await careAuthorized(request, env)) return 'david';
+  return null;
+}
+
+async function roomPhotoList(env, owner, wallOnly=false) {
+  const rows=await env.DB.prepare('SELECT id,caption,content_type,created_at,taken_at,wall_slot,frame_style FROM room_photos WHERE owner = ? AND (? = 0 OR wall_slot BETWEEN 0 AND 11) ORDER BY CASE WHEN wall_slot<0 THEN 12 ELSE wall_slot END, created_at DESC, id DESC LIMIT 24').bind(owner,wallOnly ? 1 : 0).all();
+  return (rows.results || []).map(row=>({
+    id:Number(row.id),caption:row.caption,contentType:row.content_type,createdAt:row.created_at,takenAt:row.taken_at || null,
+    wallSlot:Number(row.wall_slot),frameStyle:ROOM_FRAME_STYLES.has(row.frame_style) ? row.frame_style : 'walnut',owner
+  }));
+}
+
 async function uploadRoomPhoto(request, env) {
-  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
-  const photoCount = await env.DB.prepare('SELECT COUNT(*) AS count FROM room_photos').first();
-  if (Number(photoCount?.count) >= 24) return json(request, env, {error:'相册最多保存 24 张，删除不再需要的照片之后再上传。'}, 409);
+  const owner = await roomPhotoOwner(request, env);
+  if (!owner) return json(request, env, {error:'请登录后管理照片。'}, 401);
   const contentType = (request.headers.get('Content-Type') || '').split(';')[0].toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) return json(request, env, {error:'请选择 JPG、PNG 或 WebP 图片。'}, 415);
   const declared = Number(request.headers.get('Content-Length') || 0);
@@ -810,41 +824,53 @@ async function uploadRoomPhoto(request, env) {
   catch (_) { return json(request, env, {error:'照片说明格式不正确。'}, 400); }
   const takenAt = request.headers.get('X-Photo-Taken-At') || null;
   if (takenAt !== null && !validRoomPhotoDate(takenAt)) return json(request, env, {error:'拍摄日期格式不正确。'}, 400);
-  const occupied = await env.DB.prepare('SELECT wall_slot FROM room_photos WHERE wall_slot BETWEEN 0 AND 11').all();
-  const usedSlots = new Set((occupied.results || []).map(row => Number(row.wall_slot)));
-  const wallSlot = Array.from({length:12}, (_, index) => index).find(index => !usedSlots.has(index)) ?? -1;
-  const key = `d1:${crypto.randomUUID()}`;
+  const key = 'd1:' + crypto.randomUUID();
   const createdAt = new Date().toISOString();
   const frameStyle = 'walnut';
-  const result = await env.DB.prepare('INSERT INTO room_photos (object_key, content_type, caption, created_at, blob_data, wall_slot, frame_style, taken_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(key, contentType, caption, createdAt, bytes, wallSlot, frameStyle, takenAt).run();
-  return json(request, env, {ok:true, photo:{id:Number(result.meta?.last_row_id) || 0, caption, contentType, createdAt, takenAt, wallSlot, frameStyle}}, 201);
+  // Pick a free slot and enforce the album limit atomically, even across devices.
+  const row = await env.DB.prepare(`
+    WITH slots(n) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11))
+    INSERT INTO room_photos (object_key, content_type, caption, created_at, blob_data, wall_slot, frame_style, taken_at, owner)
+    SELECT ?,?,?,?,?,COALESCE((SELECT MIN(n) FROM slots WHERE n NOT IN (SELECT wall_slot FROM room_photos WHERE owner = ?)), -1),?,?,?
+    WHERE (SELECT COUNT(*) FROM room_photos WHERE owner = ?) < 24
+    RETURNING id, wall_slot
+  `).bind(key,contentType,caption,createdAt,bytes,owner,frameStyle,takenAt,owner,owner).first();
+  if (!row) return json(request,env,{error:'相册最多保存 24 张，请先删除不再需要的照片。'},409);
+  return json(request,env,{ok:true,photo:{id:Number(row.id),caption,contentType,createdAt,takenAt,wallSlot:Number(row.wall_slot),frameStyle,owner}},201);
 }
 
 async function updateRoomPhotoLayout(request, env, id) {
-  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
+  const owner = await roomPhotoOwner(request, env);
+  if (!owner) return json(request, env, {error:'请登录后管理照片。'}, 401);
   if (!Number.isSafeInteger(id) || id < 1) return json(request, env, {error:'照片编号无效。'}, 400);
   const body = await bodyJSON(request);
   if (Object.hasOwn(body,'takenAt')) {
     const {takenAt} = body;
     if (takenAt !== null && !validRoomPhotoDate(takenAt)) return json(request, env, {error:'拍摄日期格式不正确。'}, 400);
-    const changed = await env.DB.prepare('UPDATE room_photos SET taken_at = ? WHERE id = ?').bind(takenAt,id).run();
+    const changed = await env.DB.prepare('UPDATE room_photos SET taken_at = ? WHERE id = ? AND owner = ?').bind(takenAt,id,owner).run();
     if (!Number(changed.meta?.changes)) return json(request, env, {error:'照片不存在。'}, 404);
     return json(request, env, {ok:true, photo:{id, takenAt}});
   }
   const wallSlot = body.wallSlot, frameStyle = String(body.frameStyle || '');
   if (!Number.isInteger(wallSlot) || wallSlot < -1 || wallSlot > 11) return json(request, env, {error:'请选择有效的照片位置。'}, 400);
   if (!ROOM_FRAME_STYLES.has(frameStyle)) return json(request, env, {error:'请选择有效的画框样式。'}, 400);
-  const occupied = wallSlot>=0 && await env.DB.prepare('SELECT id FROM room_photos WHERE wall_slot = ? AND id <> ?').bind(wallSlot, id).first();
-  if (occupied) return json(request, env, {error:'这个画框已经放了照片，请选择空位置。'}, 409);
-  const result = await env.DB.prepare('UPDATE room_photos SET wall_slot = ?, frame_style = ? WHERE id = ?').bind(wallSlot, frameStyle, id).run();
-  if (!Number(result.meta?.changes)) return json(request, env, {error:'照片不存在。'}, 404);
+  const result = await env.DB.prepare(`
+    UPDATE room_photos SET wall_slot = ?, frame_style = ?
+    WHERE id = ? AND owner = ?
+      AND (? < 0 OR NOT EXISTS (SELECT 1 FROM room_photos WHERE owner = ? AND wall_slot = ? AND id <> ?))
+  `).bind(wallSlot,frameStyle,id,owner,wallSlot,owner,wallSlot,id).run();
+  if (!Number(result.meta?.changes)) {
+    const exists = await env.DB.prepare('SELECT id FROM room_photos WHERE id = ? AND owner = ?').bind(id,owner).first();
+    return exists ? json(request,env,{error:'这个画框已经放了照片，请选择空位置。'},409)
+      : json(request,env,{error:'照片不存在。'},404);
+  }
   return json(request, env, {ok:true, photo:{id, wallSlot, frameStyle}});
 }
 
 async function roomPhoto(request, env, id) {
-  const authorized = await userAuthorized(request, env) || await careAuthorized(request, env);
-  if (!authorized) return json(request, env, {error:'没有权限查看这张图片。'}, 401);
-  const row = await env.DB.prepare('SELECT content_type, blob_data FROM room_photos WHERE id = ?').bind(id).first();
+  const owner = await roomPhotoOwner(request, env);
+  if (!owner) return json(request, env, {error:'没有权限查看这张图片。'}, 401);
+  const row = await env.DB.prepare('SELECT content_type, blob_data FROM room_photos WHERE id = ? AND (owner = ? OR wall_slot BETWEEN 0 AND 11)').bind(id,owner).first();
   if (!row?.blob_data) return json(request, env, {error:'图片不存在。'}, 404);
   const bytes = blobValue(row.blob_data);
   if (!bytes.byteLength || bytes.byteLength > MAX_ROOM_PHOTO) return json(request, env, {error:'云端图片数据已损坏，请重新上传。'}, 422);
@@ -852,19 +878,16 @@ async function roomPhoto(request, env, id) {
 }
 
 async function listRoomPhotos(request, env) {
-  if (!await userAuthorized(request,env) && !await careAuthorized(request,env)) {
-    return json(request,env,{error:'请登录后查看照片。'},401);
-  }
-  const rows=await env.DB.prepare('SELECT id,caption,created_at,taken_at,wall_slot,frame_style FROM room_photos ORDER BY CASE WHEN wall_slot<0 THEN 12 ELSE wall_slot END,id DESC LIMIT 24').all();
-  return json(request,env,{photos:rows.results.map(row=>({
-    id:row.id,caption:row.caption,createdAt:row.created_at,takenAt:row.taken_at,wallSlot:row.wall_slot,frameStyle:row.frame_style
-  }))});
+  const owner=await roomPhotoOwner(request,env);
+  if (!owner) return json(request,env,{error:'请登录后查看照片。'},401);
+  const [photos,davidPhotos]=await Promise.all([roomPhotoList(env,'lynn',owner!=='lynn'),roomPhotoList(env,'david',owner!=='david')]);
+  return json(request,env,{photos,davidPhotos});
 }
 
 async function roomPhotoNotes(request,env,id,url) {
-  const author=await userAuthorized(request,env) ? 'lynn' : await careAuthorized(request,env) ? 'david' : null;
+  const author=await roomPhotoOwner(request,env);
   if (!author) return json(request,env,{error:'请登录后查看照片留言。'},401);
-  const photo=await env.DB.prepare('SELECT id FROM room_photos WHERE id=?').bind(id).first();
+  const photo=await env.DB.prepare('SELECT id FROM room_photos WHERE id=? AND (owner=? OR wall_slot BETWEEN 0 AND 11)').bind(id,author).first();
   if (!photo) return json(request,env,{error:'这张照片已移除。'},404);
   if (request.method==='POST') {
     const data=await writtenTextJSON(request);
@@ -873,9 +896,9 @@ async function roomPhotoNotes(request,env,id,url) {
       return json(request,env,{error:body ? '留言编号无效，请重试。' : '请填写留言。'},400);
     }
     await env.DB.prepare(`INSERT INTO room_photo_notes(photo_id,author,client_id,body,created_at)
-      SELECT id,?,?,?,? FROM room_photos WHERE id=?
+      SELECT id,?,?,?,? FROM room_photos WHERE id=? AND (owner=? OR wall_slot BETWEEN 0 AND 11)
       ON CONFLICT(photo_id,author,client_id) DO NOTHING`)
-      .bind(author,data.clientId,body,new Date().toISOString(),id).run();
+      .bind(author,data.clientId,body,new Date().toISOString(),id,author).run();
     const note=await env.DB.prepare('SELECT id,author,body,created_at AS createdAt FROM room_photo_notes WHERE photo_id=? AND author=? AND client_id=?')
       .bind(id,author,data.clientId).first();
     return note ? json(request,env,{note}) : json(request,env,{error:'这张照片已移除。'},404);
@@ -888,9 +911,11 @@ async function roomPhotoNotes(request,env,id,url) {
 }
 
 async function removeRoomPhoto(request, env, id) {
-  if (!await userAuthorized(request, env)) return json(request, env, {error:'请先连接云端进度。'}, 401);
-  const result = await env.DB.prepare('DELETE FROM room_photos WHERE id = ?').bind(id).run();
-  return json(request, env, {ok:true, removed:Number(result.meta?.changes) || 0});
+  const owner = await roomPhotoOwner(request, env);
+  if (!owner) return json(request, env, {error:'请登录后管理照片。'}, 401);
+  const result = await env.DB.prepare('DELETE FROM room_photos WHERE id = ? AND owner = ?').bind(id,owner).run();
+  if (!Number(result.meta?.changes)) return json(request,env,{error:'照片不存在。'},404);
+  return json(request, env, {ok:true, removed:1});
 }
 
 async function claim(request, env) {
