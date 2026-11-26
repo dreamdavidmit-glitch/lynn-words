@@ -7,12 +7,13 @@ import worker from '../cloudflare/src/worker.js';
 const db=new DatabaseSync(':memory:');
 const migrations=new URL('../cloudflare/migrations/',import.meta.url);
 const files=readdirSync(migrations).filter(name=>name.endsWith('.sql')).sort();
-for (const file of files.slice(0,-1)) db.exec(readFileSync(new URL(file,migrations),'utf8'));
+const ownerMigration=files.indexOf('0019_room_photo_owner.sql');
+assert.ok(ownerMigration>0);
+for (const file of files.slice(0,ownerMigration)) db.exec(readFileSync(new URL(file,migrations),'utf8'));
 const tiny=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jKkQAAAAASUVORK5CYII=','base64');
 db.prepare('INSERT INTO room_photos (object_key,content_type,caption,created_at,blob_data,wall_slot) VALUES (?,?,?,?,?,?)')
   .run('old','image/png','现有照片','2026-11-01T12:00:00Z',tiny,0);
-assert.equal(files.at(-1),'0019_room_photo_owner.sql');
-db.exec(readFileSync(new URL(files.at(-1),migrations),'utf8'));
+for (const file of files.slice(ownerMigration)) db.exec(readFileSync(new URL(file,migrations),'utf8'));
 assert.equal(db.prepare('SELECT owner FROM room_photos WHERE id=1').get().owner,'lynn');
 
 const DB={

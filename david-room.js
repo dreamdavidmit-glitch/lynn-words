@@ -4,11 +4,6 @@
   const message=room.querySelector('.david-room-message');
   const params=new URLSearchParams(location.search);
   const preview=params.get('local-room')==='1' && (location.protocol==='file:'||['localhost','127.0.0.1','[::1]'].includes(location.hostname));
-  if(!preview && !window.LynnOpening?.isOpen()){
-    message.textContent='北京时间 11 月 25 日 00:00 开放。';message.hidden=false;
-    window.addEventListener('lynn-opening',()=>location.reload(),{once:true});
-    return;
-  }
   document.title=document.querySelector('[data-david-title]').textContent='David 的 3D 房间';
   stage.classList.add('is-loading');
   if(!window.LynnRoom3D)await new Promise((resolve,reject)=>{

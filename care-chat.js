@@ -29,11 +29,11 @@
   function threadHTML() {
     if (loading && !messages.length) return '<div class="owner-chat-empty">正在打开留言信箱…</div>';
     if (!messages.length) return '<div class="owner-chat-empty">还没有留言。你写下的第一句话会在 Lynn 下次打开网站时出现。</div>';
-    return messages.slice(-12).map(message => `<article class="owner-message ${message.sender === 'owner' ? 'mine' : 'reply'}"><span>${message.sender === 'owner' ? '你发给 Lynn' : 'Lynn 的回复'}</span><p>${escape(message.body)}</p><small>${time(message.createdAt)}${message.sender === 'owner' ? message.readAt ? ' · Lynn 已读' : ' · 等待查看' : ''}</small></article>`).join('');
+    return messages.filter((m,i)=>i>=messages.length-12 || (m.sender==='lynn' && m.photoId && !m.readAt)).map(message => `<article class="owner-message ${message.sender === 'owner' ? 'mine' : 'reply'}"><span>${message.sender === 'owner' ? '你发给 Lynn' : 'Lynn 的回复'}</span><p>${escape(message.body)}</p>${Number.isSafeInteger(message.photoId) && message.photoId>0 ? `<button type="button" class="daily-photo-link" data-memory-photo="${message.photoId}">查看记忆照片 →</button>` : ''}<small>${time(message.createdAt)}${message.sender === 'owner' ? message.readAt ? ' · Lynn 已读' : ' · 等待查看' : ''}</small></article>`).join('');
   }
 
   function panelHTML() {
-    return `<section class="paper-panel owner-chat-panel"><div class="owner-chat-heading"><div><span>LEAVE A LITTLE NOTE</span><h2>给 Lynn 的留言</h2><p>她不在线也没关系，留言会留在小词窝；她的回复也会回到这里。</p></div><i>💌</i></div><div class="site-warning" role="status" hidden></div><div class="owner-chat-thread">${threadHTML()}</div><form class="owner-chat-form"><textarea name="body" rows="2" placeholder="写一句想留给 Lynn 的话…" aria-label="留言内容" required></textarea><button type="submit" ${loading ? 'disabled' : ''}>${loading ? '正在送信…' : '送进小词窝'}<span>→</span></button></form><small class="owner-chat-hint">本浏览器自动留存草稿 · 只有你和 Lynn 可以看到</small></section>`;
+    return `<section class="paper-panel owner-chat-panel"><div class="owner-chat-heading"><div><span>LEAVE A LITTLE NOTE</span><h2>给 Lynn 的留言 <small class="daily-photo-badge" hidden></small></h2><p>她不在线也没关系，留言会留在小词窝；她的回复也会回到这里。</p></div><i>💌</i></div><div class="site-warning" role="status" hidden></div><div class="owner-chat-thread">${threadHTML()}</div><form class="owner-chat-form"><textarea name="body" rows="2" placeholder="写一句想留给 Lynn 的话…" aria-label="留言内容" required></textarea><button type="submit" ${loading ? 'disabled' : ''}>${loading ? '正在送信…' : '送进小词窝'}<span>→</span></button></form><small class="owner-chat-hint">本浏览器自动留存草稿 · 只有你和 Lynn 可以看到</small></section>`;
   }
 
   function inject() {
@@ -46,6 +46,10 @@
       panel = content.querySelector('.owner-chat-panel');
       LynnLetters.mount(panel.querySelector('form'),'owner');
     }
+    const badge=panel.querySelector('.daily-photo-badge');
+    const unread=messages.filter(m=>m.sender==='lynn' && m.photoId && !m.readAt).length;
+    badge.hidden=!unread;
+    badge.textContent=unread ? unread+' 张新照片' : '';
     const status = panel.querySelector('.site-warning');
     status.textContent = sendError || error;
     status.hidden = !status.textContent;
@@ -84,6 +88,7 @@
     finally { sending = false; inject(); }
   });
 
+  window.addEventListener('lynn-photo-notice-read',load);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
   setInterval(() => { if (!document.hidden) load(); }, 45_000);
 })();

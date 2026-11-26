@@ -54,7 +54,7 @@
 
   function messagesHTML() {
     if (!thread.length) return '<div class="message-empty"><span>💌</span><strong>信箱还是空的</strong><p>以后收到的留言会一直保存在这里。</p></div>';
-    return thread.map(message => `<article class="message-bubble ${message.sender === 'lynn' ? 'mine' : 'theirs'}"><span>${message.sender === 'lynn' ? 'Lynn' : '给你的留言'}</span><p>${escape(message.body)}</p><small>${time(message.createdAt)}${message.sender === 'lynn' && message.readAt ? ' · 已读' : ''}</small></article>`).join('');
+    return thread.map(message => `<article class="message-bubble ${message.sender === 'lynn' ? 'mine' : 'theirs'}"><span>${message.sender === 'lynn' ? 'Lynn' : '给你的留言'}</span><p>${escape(message.body)}</p>${Number.isSafeInteger(message.photoId) && message.photoId>0 ? `<button type="button" class="daily-photo-link" data-memory-photo="${message.photoId}">查看记忆照片 →</button>` : ''}<small>${time(message.createdAt)}${message.sender === 'lynn' && message.readAt ? ' · 已读' : ''}</small></article>`).join('');
   }
 
   function renderModal() {
@@ -96,7 +96,7 @@
       const result = await window.LynnSync.messages(markRead);
       if (id !== generation || !connected()) return;
       thread = result.messages || [];
-      unread = markRead ? 0 : Number(result.unread) || 0;
+      unread = Number(result.unread) || 0;
       error = '';
     } catch (reason) { if (id !== generation) return; error = reason.message || '暂时收不到留言。'; }
     ensureButton();
@@ -156,6 +156,7 @@
     if (online) { ensureButton(); if (!resumeDraft()) load(opened); }
     else { generation++; close({remember:true}); thread=[]; unread=0; ensureButton(); }
   });
+  window.addEventListener('lynn-photo-notice-read',()=>load(opened));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) load(opened); });
   setInterval(() => { if (!document.hidden) load(opened); }, 60_000);
   setTimeout(() => { ensureButton(); if (!resumeDraft()) load(opened); }, 1600);

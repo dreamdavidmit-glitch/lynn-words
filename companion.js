@@ -106,9 +106,7 @@
     }).join('');
   }
 
-  const roomOpen=()=>root.location?.pathname?.endsWith('/room-preview.html')||root.LynnOpening?.isOpen()===true;
   function roomHTML() {
-    if(!roomOpen())return '<section class="companion-card room-card"><div class="room-copy"><h2>小词窝有个小秘密</h2><p>北京时间 11 月 25 日 00:00 再见。现在可以照常背词。</p></div></section>';
     const theme = roomTheme();
     const photoList = cloud.photos || [];
     const occupiedSlots = new Map(photoList.map((photo,index) => [Number.isInteger(Number(photo.wallSlot)) ? Number(photo.wallSlot) : index, Number(photo.id)]));
@@ -220,7 +218,6 @@
   }
 
   async function mount3DRoom(room) {
-    if(!roomOpen())return;
     const stage = room?.querySelector('.room-3d-stage');
     if (!stage?.isConnected || stage.classList.contains('is-loading') || room3D) return;
     roomObserver?.unobserve(room);
@@ -454,7 +451,6 @@
   });
 
   let wasConnected = false;
-  root.addEventListener('lynn-opening',()=>{if(context?.route==='home')inject();});
   root.addEventListener('lynn-sync-status', () => {
     const online = connected();
     if (online === wasConnected) return;

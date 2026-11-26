@@ -105,7 +105,7 @@
   }
   function makePanel() {
     const card=document.createElement('section');
-    card.className='paper-panel care-companion-panel care-david-album';
+    card.className='paper-panel care-david-album';
     card.innerHTML='<div class="panel-heading"><div><span>DAVID’S ROOM</span><h2>David 的窗边相册</h2></div><a class="text-button" href="david-room.html">进入 David 的房间 →</a></div><details><summary>上传和管理照片 <small data-album-count></small></summary><p>照片放进 David 的相框，不会占用 Lynn 的位置。两个人走进房间时都能看到挂在墙上的照片。</p><fieldset><form class="care-soft-form"><label>选择相册里的图片<input name="photo" type="file" accept="image/*" required></label><label>照片配文（选填）<input name="caption" type="text" maxlength="120" placeholder="想记住这一刻的什么？"></label><button type="submit" disabled>上传到 David 的相册</button></form><button type="button" data-refresh>刷新相册</button><div class="care-mini-list"></div></fieldset><p role="status"></p></details>';
     const details=card.querySelector('details'), form=card.querySelector('form');
     const reload=()=>perform(async()=>{await refresh();status('');});
@@ -132,6 +132,7 @@
     };
     return card;
   }
+  window.LynnCarePhotos=Object.freeze({compress});
   window.addEventListener('lynn-care-rendered',()=>{
     const content=document.querySelector('.care-content'), current=token();
     if (!content || !current) return;

@@ -136,6 +136,13 @@
     } catch (_) { return false; }
   }
 
+  async function dailyRequest(path, options = {}) {
+    if (!token()) throw new Error('请先登录小词窝。');
+    const response=await api(path,{signal:AbortSignal.timeout(20000),...options});
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response;
+  }
+
   async function messages(markRead = false) {
     if (!token()) throw new Error('先连接云端进度，才能收取留言。');
     const response = await api(`/messages${markRead ? '?read=1' : ''}`);
@@ -549,5 +556,5 @@
     clearInterval(presenceTimer); presenceTimer = root.setInterval(() => { if (!root.document.hidden) reportPresence('online'); }, 55_000);
   }
 
-  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, messages, reply, companion, saveMood, openSurprise, submitRoomWish, uploadRoomPhoto, roomPhoto, roomPhotoNotes, postRoomPhotoNote, removeRoomPhoto, updateRoomPhotoLayout, updateRoomPhotoDate, roomLive, connected: () => !!token(), status: () => ({...status})};
+  root.LynnSync = {init, bootstrap, schedule, showSetup: openAfterWelcome, flush: () => push(getState(), meta().revision || 0, true), open, messages, reply, dailyRequest, companion, saveMood, openSurprise, submitRoomWish, uploadRoomPhoto, roomPhoto, roomPhotoNotes, postRoomPhotoNote, removeRoomPhoto, updateRoomPhotoLayout, updateRoomPhotoDate, roomLive, connected: () => !!token(), status: () => ({...status})};
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -597,11 +597,20 @@ async function messageThread(request, env, role) {
   const other = role === 'owner' ? 'lynn' : 'owner';
   const url = new URL(request.url);
   if (url.searchParams.get('read') === '1') {
-    await env.DB.prepare('UPDATE messages SET read_at = ? WHERE sender = ? AND read_at IS NULL').bind(new Date().toISOString(), other).run();
+    await env.DB.prepare('UPDATE messages SET read_at = ? WHERE sender = ? AND read_at IS NULL AND photo_id IS NULL').bind(new Date().toISOString(), other).run();
   }
-  const rows = await env.DB.prepare('SELECT id, sender, body, created_at, read_at FROM messages ORDER BY id DESC LIMIT 100').all();
-  const messages = (rows.results || []).reverse().map(row => ({id:Number(row.id), sender:row.sender, body:row.body, createdAt:row.created_at, readAt:row.read_at || ''}));
+  const rows = await env.DB.prepare('SELECT id, sender, body, created_at, read_at, photo_id FROM messages ORDER BY id DESC LIMIT 100').all();
+  const messages = (rows.results || []).reverse().map(row => ({id:Number(row.id), sender:row.sender, body:row.body, createdAt:row.created_at, readAt:row.read_at || '', ...(row.photo_id ? {photoId:Number(row.photo_id)} : {})}));
   return json(request, env, {messages, unread:messages.filter(message => message.sender === other && !message.readAt).length});
+}
+
+async function readPhotoNotice(request,env,id) {
+  const owner=await roomPhotoOwner(request,env);
+  if (!owner) return json(request,env,{error:'请先登录。'},401);
+  if (!Number.isSafeInteger(id) || id<1) return json(request,env,{error:'照片编号无效。'},400);
+  await env.DB.prepare('UPDATE messages SET read_at=? WHERE photo_id=? AND sender=? AND read_at IS NULL')
+    .bind(new Date().toISOString(),id,owner==='david' ? 'lynn' : 'owner').run();
+  return json(request,env,{ok:true});
 }
 
 async function sendMessage(request, env, sender) {
@@ -613,6 +622,104 @@ async function sendMessage(request, env, sender) {
   const result = await env.DB.prepare('INSERT INTO messages (sender, body, created_at, read_at) VALUES (?, ?, ?, NULL)').bind(sender, text, createdAt).run();
   await env.DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 300)').run();
   return json(request, env, {ok:true, message:{id:Number(result.meta?.last_row_id) || 0, sender, body:text, createdAt, readAt:''}}, 201);
+}
+
+
+const dailyMs=86_400_000;
+const dailyOffset=8*3_600_000;
+const dailyTemplateCount=12;
+function dailyClock(now=Date.now()) {
+  const local=new Date(now+dailyOffset).toISOString();
+  return {
+    now, day:local.slice(0,10), time:local.slice(11,16),
+    tomorrow:new Date(now+dailyOffset+dailyMs).toISOString().slice(0,10)
+  };
+}
+function fallbackDailyTemplate(day) {
+  return ((Math.floor(Date.parse(day+'T00:00:00Z')/dailyMs)%dailyTemplateCount+dailyTemplateCount)%dailyTemplateCount)+1;
+}
+async function dailyCard(env,day) {
+  const row=await env.DB.prepare('SELECT template,content_type FROM daily_cards WHERE day=?').bind(day).first();
+  return {day, template:row?.template ?? fallbackDailyTemplate(day), custom:!!row?.content_type, configured:!!row};
+}
+async function dailyRoute(request,env,url,care=false) {
+  const reply=(body,status=200)=>json(request,env,body,status);
+  if (!(care ? await careAuthorized(request,env) : await userAuthorized(request,env))) {
+    return reply({error:care?'请先登录关心面板。':'请先登录小词窝。'},401);
+  }
+  const clock=dailyClock(), {method}=request, path=url.pathname;
+  if (path.endsWith('/image') && method==='GET') {
+    const day=care ? clock.tomorrow : clock.day;
+    if (url.searchParams.get('date')!==day) return reply({error:'日期已经变化，请刷新。'},409);
+    const row=await env.DB.prepare('SELECT content_type,blob_data FROM daily_cards WHERE day=?').bind(day).first();
+    if (!row?.blob_data) return reply({error:'暂时没有自定义打卡图。'},404);
+    const bytes=blobValue(row.blob_data);
+    if (!bytes.byteLength || bytes.byteLength>MAX_ROOM_PHOTO) return reply({error:'图片无法读取。'},422);
+    return new Response(bytes,{headers:headers(request,env,{'Content-Type':row.content_type,'Content-Length':String(bytes.byteLength)})});
+  }
+  if (care && path==='/care/daily/card') {
+    const day=clock.tomorrow;
+    if (method==='GET') return reply({card:await dailyCard(env,day)});
+    if (!['PUT','DELETE'].includes(method)) return reply({error:'操作未找到。'},404);
+    if (url.searchParams.get('date')!==day) return reply({error:'已跨天，请刷新明天的日期后重试。'},409);
+    if (method==='DELETE') {
+      await env.DB.prepare('DELETE FROM daily_cards WHERE day=?').bind(day).run();
+      return reply({card:await dailyCard(env,day)});
+    }
+    const type=(request.headers.get('Content-Type') || '').split(';')[0].toLowerCase();
+    let number=null, data=null;
+    if (type==='application/json') {
+      const body=await bodyJSON(request);
+      number=body?.template;
+      if (!Number.isInteger(number) || number<1 || number>dailyTemplateCount) return reply({error:'请选择一张默认插画。'},400);
+    } else {
+      if (!['image/jpeg','image/png','image/webp'].includes(type)) return reply({error:'请选择 JPG、PNG 或 WebP 图片。'},415);
+      if (Number(request.headers.get('Content-Length'))>MAX_ROOM_PHOTO) return reply({error:'压缩后的图片最多 1.5 MB。'},413);
+      data=new Uint8Array(await request.arrayBuffer());
+      if (!data.length || data.length>MAX_ROOM_PHOTO) return reply({error:'压缩后的图片最多 1.5 MB。'},413);
+    }
+    await env.DB.prepare('INSERT INTO daily_cards(day,template,content_type,blob_data) VALUES (?,?,?,?) ON CONFLICT(day) DO UPDATE SET template=excluded.template,content_type=excluded.content_type,blob_data=excluded.blob_data')
+      .bind(day,number,data ? type : null,data).run();
+    return reply({card:await dailyCard(env,day)});
+  }
+  if (!care && path==='/daily' && method==='GET') {
+    const [card,checked,reminders]=await Promise.all([
+      dailyCard(env,clock.day),
+      env.DB.prepare('SELECT checked_at FROM daily_checkins WHERE day=?').bind(clock.day).first(),
+      env.DB.prepare('SELECT id,label,time,dismissed_day AS dismissedDay FROM daily_reminders ORDER BY time,id').all()
+    ]);
+    return reply({clock,card,checkedAt:checked?.checked_at || null,reminders:reminders.results || []});
+  }
+  if (!care && path==='/daily/check-in' && method==='POST') {
+    await env.DB.prepare('INSERT OR IGNORE INTO daily_checkins(day,checked_at) VALUES (?,?)').bind(clock.day,new Date(clock.now).toISOString()).run();
+    const item=await env.DB.prepare('SELECT checked_at FROM daily_checkins WHERE day=?').bind(clock.day).first();
+    return reply({checkedAt:item.checked_at,card:await dailyCard(env,clock.day),clock});
+  }
+  const match=path.match(/^\/daily\/reminders(?:\/(\d+)(\/dismiss)?)?$/);
+  if (!care && match) {
+    const id=match[1]?Number(match[1]):null;
+    if (id!==null && (!Number.isSafeInteger(id) || id<1)) return reply({error:'提醒编号无效。'},400);
+    if (id!==null && match[2] && method==='POST') {
+      if (url.searchParams.get('date')!==clock.day) return reply({error:'日期已经变化，请刷新提醒。'},409);
+      const result=await env.DB.prepare('UPDATE daily_reminders SET dismissed_day=? WHERE id=? AND time<=?').bind(clock.day,id,clock.time).run();
+      return result.meta?.changes ? reply({ok:true}) : reply({error:'提醒不存在或还没到时间。'},404);
+    }
+    if (!match[2] && id!==null && method==='DELETE') {
+      await env.DB.prepare('DELETE FROM daily_reminders WHERE id=?').bind(id).run();
+      return reply({ok:true});
+    }
+    if (!match[2] && ((id===null && method==='POST') || (id!==null && method==='PUT'))) {
+      const body=await bodyJSON(request);
+      const label=typeof body?.label==='string' ? body.label.trim() : '', time=body?.time;
+      if (!label || label.length>100 || typeof time!=='string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) return reply({error:'填写 1–100 字提醒和有效的北京时间。'},400);
+      const row=id===null
+        ? await env.DB.prepare('INSERT INTO daily_reminders(label,time) SELECT ?,? WHERE (SELECT COUNT(*) FROM daily_reminders)<12 RETURNING id').bind(label,time).first()
+        : await env.DB.prepare('UPDATE daily_reminders SET label=?,time=? WHERE id=? RETURNING id').bind(label,time,id).first();
+      if (!row) return reply({error:id===null?'最多可保存 12 条每日提醒。':'这条提醒已移除。'},id===null?409:404);
+      return reply({id:Number(row.id)},id===null?201:200);
+    }
+  }
+  return reply({error:'接口不存在。'},404);
 }
 
 async function careCompanion(request, env) {
@@ -1263,6 +1370,7 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: headers(request, env)});
     const url = new URL(request.url);
     try {
+      if (/^\/(?:care\/)?daily(?:\/|$)/.test(url.pathname)) return await dailyRoute(request,env,url,url.pathname.startsWith('/care/'));
       if (url.pathname === '/release/opening' && request.method === 'GET') {
         return json(request,env,{now:Date.now(),opensAt:Date.parse('2026-11-25T00:00:00+08:00')});
       }
@@ -1307,6 +1415,8 @@ export default {
       if (url.pathname === '/room/wishes' && request.method === 'POST') return await createRoomWish(request,env);
       if (url.pathname === '/room/photos' && request.method === 'POST') return await uploadRoomPhoto(request, env);
       if (url.pathname === '/room/photos' && request.method === 'GET') return await listRoomPhotos(request,env);
+      const photoRead=url.pathname.match(/^\/messages\/photo\/(\d+)\/read$/);
+      if (photoRead && request.method==='POST') return await readPhotoNotice(request,env,Number(photoRead[1]));
       const photoNotesRoute=url.pathname.match(/^\/room\/photos\/(\d+)\/notes$/);
       if (photoNotesRoute && ['GET','POST'].includes(request.method)) return await roomPhotoNotes(request,env,Number(photoNotesRoute[1]),url);
       const surpriseOpen = url.pathname.match(/^\/surprises\/(\d+)\/open$/);

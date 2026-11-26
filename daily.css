@@ -1,0 +1,29 @@
+.daily-card{--daily-bg:#f8effb;--daily-color:#503664;--daily-border:#ddc8e6;--daily-accent:#755095;color:var(--daily-color);background:var(--daily-bg);border:1px solid var(--daily-border);border-radius:22px;padding:clamp(16px,3vw,26px);margin:20px 0;min-width:0}
+:root[data-theme="dark"] .daily-card,.dark .daily-card{--daily-bg:#2d2437;--daily-color:#f0dcf5;--daily-border:#61476b;--daily-accent:#a981c6}
+.daily-card h2{margin:4px 0 6px;font-size:clamp(21px,3vw,28px);color:inherit}
+.daily-card p{margin:.45em 0;font-size:14px;line-height:1.5}
+.daily-eyebrow{font-size:10px;letter-spacing:.15em;font-weight:800;opacity:.77}
+.daily-heading,.daily-actions{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center}
+.daily-card details{margin-top:14px;border-top:1px solid var(--daily-border);padding-top:12px}
+.daily-card summary{cursor:pointer;font-weight:750}
+.daily-card img.daily-art{display:block;width:min(100%,420px);max-height:440px;object-fit:contain;object-position:50% 50%;margin:14px auto 6px;border-radius:15px}
+.daily-card img[hidden],.daily-card [hidden],.daily-photo-badge[hidden],.daily-memory-dialog img[hidden]{display:none}
+.daily-card fieldset{border:0;padding:0;margin:10px 0;display:flex;gap:10px;align-items:end;flex-wrap:wrap;min-width:0}
+.daily-card fieldset label{font-size:13px;display:grid;gap:4px;min-width:0}
+.daily-card input,.daily-card select{color:inherit;background:transparent;border:1px solid var(--daily-border);border-radius:10px;padding:7px;max-width:100%;font:inherit;min-height:36px}
+.daily-card button,.daily-reminder-toast button,.daily-memory-dialog button{font:inherit;font-size:13px;font-weight:720;padding:8px 12px;border:0;border-radius:11px;background:#77508f;color:#fff;cursor:pointer;min-height:37px}
+.daily-card button:disabled,.daily-card fieldset:disabled button{cursor:not-allowed;opacity:.65}
+.daily-card .daily-status:empty,.daily-card .daily-image-status:empty{display:none}
+.daily-reminder-list{list-style:none;padding:0;margin:12px 0}
+.daily-reminder-list li{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.daily-reminder-list li span{flex:1;overflow-wrap:anywhere}
+.daily-reminder-list li button{min-height:32px;padding:5px 8px}
+.daily-reminder-toast{position:fixed;z-index:110;left:16px;bottom:max(90px,calc(env(safe-area-inset-bottom) + 82px));padding:12px 14px;max-width:min(330px,calc(100% - 32px));background:#32233f;color:#fff;border:1px solid #e0b4eb;border-radius:16px;box-shadow:0 9px 30px #2318315a;font:14px system-ui}
+.daily-reminder-toast small{color:#e7c4f3}.daily-reminder-toast p{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 10px}
+.daily-photo-link{display:block;max-width:100%;border:1px solid #bb97cc;background:#f2e5f8;color:#5f3e72;border-radius:8px;padding:6px 9px;font:700 12px system-ui;cursor:pointer;margin:6px 0}
+.daily-photo-badge{color:#684682;background:#eee2f7;border-radius:12px;padding:4px 8px;font-size:12px}
+.daily-memory-dialog{max-width:min(670px,calc(100vw - 24px));max-height:88vh;overflow:auto;border:1px solid #d9bde5;border-radius:18px;background:#fff8ff;color:#4b3558;padding:16px}
+.daily-memory-dialog::backdrop{background:#1c1326ba}
+.daily-memory-dialog h2{margin:8px 0;font-size:19px}
+.daily-memory-dialog img{display:block;max-width:100%;max-height:65vh;object-fit:contain}
+.care-david-album{margin-bottom:20px}

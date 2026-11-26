@@ -4,7 +4,7 @@
 // 读音 mp3 不经过这里，交给浏览器自己处理（iPad Safari 播放音频需要分段请求）。
 // 如果以后改了 dictionary/ 或 vendor/ 里的文件，把下面的 VERSION 改一下即可清掉旧缓存。
 const VERSION = 'lynn-v92-joystick-album';
-const CORE = ['./', 'index.html', 'opening-countdown.js?v=1', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'sync.js', 'letter-drafts.js', 'messages.js', 'companion.js', 'room-photo-dates.js', 'room-album.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'festival.js', 'release.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
+const CORE = ['./', 'index.html', 'daily.css?v=1', 'daily.js?v=1', 'app.css', 'lynn.css', 'dataload.js', 'model.js', 'sync.js', 'letter-drafts.js', 'messages.js', 'companion.js', 'room-photo-dates.js', 'room-album.js', 'extract.js', 'dictionary.js', 'speech.js', 'importer.js', 'christmas.js', 'festival.js', 'release.js', 'welcome.js', 'app.js', 'mascot.svg', 'mascot-bday.svg', 'cet4.json', 'audio/index.json?v=emma-1', 'manifest.webmanifest', 'apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(VERSION)

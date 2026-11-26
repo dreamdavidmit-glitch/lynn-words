@@ -18,21 +18,21 @@
     signOff: '想把这里布置成什么样，可以慢慢告诉我。'
   };
   const release = {
-    id: '2026.11.25-room-together',
-    version: '2026.11.25 · 房间和学习',
-    date: '2026年11月25日',
-    title: 'Lynn，来看看小词窝的新样子',
-    message: '背单词还是按你喜欢的节奏。学累了，欢迎到房间坐一会儿。',
+    id: '2026.11.26-daily-corner',
+    version: '2026.11.26 · 每日打卡与提醒',
+    date: '2026年11月26日',
+    title: 'Lynn，今天也来拆一张小图吧',
+    message: '打卡和背词是两件事。不管今天学多少，都可以收下一张图片。',
     items: [
-      {icon:'🌱',title:'难记的词，多见几次',text:'复习会照顾近期答错、犹豫或还没巩固的词。答对以后，还是可以自己点下一题。'},
-      {icon:'💌',title:'写到一半的话，等你回来',text:'留言、心情和照片背面的草稿在同一浏览器标签页刷新后还能继续。'},
-      {icon:'🚪',title:'来串个门',text:'走廊连着两间房，可以按门铃、点「来啦」、坐长椅一起看日落。圣诞雪夜还能在雾窗上写字。'},
-      {icon:'🖼️',title:'留下一点小东西',text:'走廊有共享白板和小展台。相片可以取下再挂回去，手机和平板也换成了移动摇杆。想留给以后自己的话，可以写在私人便签里。'}
+      {icon:'🪻',title:'每天一张小图',text:'点「今日打卡」就能打开今天的图片。'},
+      {icon:'🖼️',title:'想分享一张记忆',text:'你挂上新照片，对方的信箱会收到提醒，点开就能看。'},
+      {icon:'⏰',title:'给自己留个提醒',text:'可以按北京时间设置每天几点提醒什么。'},
+      {icon:'🌱',title:'老地方照常开放',text:'原来的开放倒计时已经收起，照常背词、看房间。'}
     ],
-    signOff:'慢慢背，慢慢画，路过的时候再留一句话。'
+    signOff:'今天也照自己的步调来。'
   };
   Object.defineProperty(root,'LYNN_RELEASE',{configurable:true,get(){
     if(root.location?.pathname?.endsWith('/room-preview.html'))return previewRelease;
-    return root.LynnOpening?.isOpen() ? release : undefined;
+    return release;
   }});
 })(typeof window !== 'undefined' ? window : globalThis);
